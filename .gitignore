@@ -1,0 +1,14 @@
+node_modules/
+**/node_modules/
+**/.next/
+**/.turbo/
+backend/.venv/
+backend/**/.venv/
+backend/.pycache/
+backend/__pycache__/
+backend/**/*.pyc
+backend/runs/
+backend/.cache/
+.env
+.env.*
+!.env.example

@@ -1,0 +1,18 @@
+# Backend API server + real integrations (optional)
+
+fastapi
+uvicorn[standard]
+
+# Veo + Gemini prompt rewriting
+google-genai
+
+# BiomedCLIP verifier
+torch
+pillow
+open_clip_torch==2.23.0
+transformers==4.35.2
+
+# Captions + narration (templates)
+twelvelabs
+deepgram-sdk
+

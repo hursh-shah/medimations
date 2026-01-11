@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -40,6 +41,26 @@ def _uniform_sample(items: Sequence[Path], n: int) -> List[Path]:
         idx = int(round(t * (len(items) - 1)))
         out.append(items[idx])
     return out
+
+
+def _linux_mem_total_mb() -> Optional[int]:
+    """
+    Best-effort total RAM check (helps avoid OOM-killing small Railway instances).
+    """
+    try:
+        meminfo = Path("/proc/meminfo")
+        if not meminfo.exists():
+            return None
+        for line in meminfo.read_text().splitlines():
+            if not line.startswith("MemTotal:"):
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                return None
+            kb = int(parts[1])
+            return max(0, kb // 1024)
+    except Exception:
+        return None
 
 
 class BiomedCLIPMedicalValidator:
@@ -244,6 +265,19 @@ class BiomedCLIPMedicalValidator:
         if self._model is not None:
             return
 
+        min_mem_mb_raw = os.environ.get("MEDICAL_DIFFUSION_BIOMEDCLIP_MIN_MEM_MB", "2048").strip()
+        try:
+            min_mem_mb = int(min_mem_mb_raw) if min_mem_mb_raw else 0
+        except Exception:
+            min_mem_mb = 2048
+        if min_mem_mb > 0:
+            total_mb = _linux_mem_total_mb()
+            if total_mb is not None and total_mb < min_mem_mb:
+                raise RuntimeError(
+                    f"BiomedCLIP disabled: RAM {total_mb}MB < {min_mem_mb}MB "
+                    "(increase Railway memory or set MEDICAL_DIFFUSION_BIOMEDCLIP_MIN_MEM_MB=0 to force)"
+                )
+
         try:
             import torch
             import torch.nn.functional as F
@@ -271,7 +305,8 @@ class BiomedCLIPMedicalValidator:
         torch = self._torch
         assert torch is not None
         imgs = torch.stack([self._preprocess(im) for im in images]).to(self._device)
-        with torch.no_grad():
+        inference_mode = getattr(torch, "inference_mode", torch.no_grad)
+        with inference_mode():
             feats = self._model.encode_image(imgs)
             feats = self._F.normalize(feats, dim=-1)
         return feats
@@ -288,7 +323,8 @@ class BiomedCLIPMedicalValidator:
         except TypeError:
             tokens = self._tokenizer(list(prompts))
         tokens = tokens.to(self._device)
-        with torch.no_grad():
+        inference_mode = getattr(torch, "inference_mode", torch.no_grad)
+        with inference_mode():
             feats = self._model.encode_text(tokens)
             feats = self._F.normalize(feats, dim=-1)
         self._text_feature_cache[key] = feats

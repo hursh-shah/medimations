@@ -7,6 +7,9 @@ uvicorn[standard]
 google-genai
 
 # BiomedCLIP verifier
+# NumPy 2.x can break some prebuilt wheels (torch/torchvision/open_clip deps).
+numpy<2
+
 # CPU-only PyTorch wheels (avoid huge CUDA layers on Railway)
 --extra-index-url https://download.pytorch.org/whl/cpu
 

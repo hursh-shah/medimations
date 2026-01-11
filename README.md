@@ -35,6 +35,7 @@ Open `http://localhost:3000`.
 - Env vars (Railway): `GOOGLE_API_KEY` (required)
 - Domain: use a **public** Railway domain (not `.railway.internal`) and route to the service port (`PORT`, usually `8080`)
 - Replicas: keep **1 replica** (jobs are stored locally; multi-replica needs shared storage)
+- BiomedCLIP: requires more RAM; if you see the process get `Killed`, increase Railway memory.
 - Health check: `https://<your-railway-domain>/api/health`
 
 **Vercel (frontend)**

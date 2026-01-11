@@ -56,6 +56,10 @@ BiomedCLIP can score sampled frames against text labels (guardrail-style). Insta
 pip install open_clip_torch==2.23.0 transformers==4.35.2 torch torchvision pillow
 ```
 
+Notes:
+- If you see errors about “NumPy 2.x” / `_ARRAY_API not found`, pin `numpy<2` (the Railway Docker build already does this).
+- BiomedCLIP is large; on Railway you likely need a higher-memory instance. If the process gets `Killed`, increase memory.
+
 Run with the validator enabled:
 ```bash
 cd backend

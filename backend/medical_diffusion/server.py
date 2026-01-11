@@ -223,9 +223,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
 
         physics_validators = [RedDotGravityValidator(), PyBulletPhysicsValidator()]
 
-        prompt_adjuster = (
-            GeminiPromptAdjuster(model=req.gemini_model) if (req.backend == "veo" and req.prompt_rewrite == "gemini") else None
-        )
+        prompt_adjuster = GeminiPromptAdjuster(model=req.gemini_model) if req.prompt_rewrite == "gemini" else None
         agent = ValidatorAgent(
             generator=backend,
             medical_validators=medical_validators,

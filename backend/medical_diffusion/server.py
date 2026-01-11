@@ -74,6 +74,7 @@ class JobState:
     biomedclip_target: Optional[str] = None
     use_biomedclip: bool = True
     input_image_provided: bool = False
+    postprocess_mode: Literal["off", "captions", "voiceover"] = "voiceover"
 
     accepted: Optional[bool] = None
     report_summary: Optional[str] = None
@@ -84,6 +85,7 @@ class JobState:
     captions_json_path: Optional[str] = None
     narration_audio_path: Optional[str] = None
     narrated_video_path: Optional[str] = None
+    postprocess_status: Literal["idle", "running", "done", "error"] = "idle"
     postprocess_error: Optional[str] = None
     error: Optional[str] = None
 
@@ -123,6 +125,9 @@ class GenerateRequest(BaseModel):
     veo_aspect_ratio: str = "9:16"
     veo_resolution: str = "720p"
     veo_poll_seconds: int = 20
+
+    # Optional post-processing
+    postprocess_mode: Literal["off", "captions", "voiceover"] = "voiceover"
 
 
 class GenerateResponse(BaseModel):
@@ -184,6 +189,16 @@ class LibraryItem(BaseModel):
     narrated_video_url: Optional[str] = None
 
 
+class PostprocessRequest(BaseModel):
+    mode: Literal["captions", "voiceover"] = "voiceover"
+    force: bool = False
+
+
+class PostprocessResponse(BaseModel):
+    job_id: str
+    status_url: str
+
+
 app = FastAPI(title="Medical Diffusion API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -219,6 +234,7 @@ def generate(req: GenerateRequest) -> GenerateResponse:
         biomedclip_target=req.biomedclip_target,
         use_biomedclip=bool(req.use_biomedclip),
         input_image_provided=bool(req.input_image),
+        postprocess_mode=req.postprocess_mode,
     )
     with _jobs_lock:
         _jobs[job_id] = job
@@ -359,8 +375,61 @@ def job_status(job_id: str) -> JobResponse:
     return JobResponse(job=asdict(job))
 
 
+_postprocess_jobs_lock = threading.Lock()
+_postprocess_jobs_in_flight: set[str] = set()
+
+
+@app.post("/api/jobs/{job_id}/postprocess", response_model=PostprocessResponse)
+def postprocess(job_id: str, req: PostprocessRequest) -> PostprocessResponse:
+    _validate_job_id(job_id)
+
+    video_path = _library_video_path(job_id)
+    if not video_path.exists():
+        fallback = _library_narrated_video_path(job_id)
+        if fallback.exists():
+            video_path = fallback
+        else:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+    mode = (req.mode or "voiceover").strip().lower()
+    if mode not in {"captions", "voiceover"}:
+        raise HTTPException(status_code=400, detail="mode must be one of: captions, voiceover")
+
+    if _load_twelvelabs_config() is None:
+        raise HTTPException(status_code=400, detail="TWELVELABS_API_KEY is not set (required for captions)")
+    if mode == "voiceover" and _load_deepgram_tts_config() is None:
+        raise HTTPException(status_code=400, detail="DEEPGRAM_API_KEY is not set (required for voiceover)")
+
+    with _postprocess_jobs_lock:
+        if job_id in _postprocess_jobs_in_flight:
+            raise HTTPException(status_code=409, detail="Postprocess already running for this job")
+        _postprocess_jobs_in_flight.add(job_id)
+
+    thread = threading.Thread(
+        target=_run_postprocess_job,
+        kwargs={"job_id": job_id, "video_path": video_path, "mode": mode, "force": bool(req.force)},
+        daemon=True,
+    )
+    thread.start()
+
+    return PostprocessResponse(job_id=job_id, status_url=f"/api/jobs/{job_id}")
+
+
 @app.get("/api/videos/{job_id}.mp4")
 def get_video(job_id: str) -> FileResponse:
+    _validate_job_id(job_id)
+    narrated = _library_narrated_video_path(job_id)
+    if narrated.exists():
+        return FileResponse(narrated, media_type="video/mp4")
+
+    path = _library_video_path(job_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Video not found")
+    return FileResponse(path, media_type="video/mp4")
+
+
+@app.get("/api/download/videos/{job_id}.mp4")
+def download_video(job_id: str) -> FileResponse:
     _validate_job_id(job_id)
     narrated = _library_narrated_video_path(job_id)
     if narrated.exists():
@@ -369,7 +438,7 @@ def get_video(job_id: str) -> FileResponse:
     path = _library_video_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Video not found")
-    return FileResponse(path, media_type="video/mp4", filename=path.name)
+    return FileResponse(path, media_type="video/mp4", filename=f"{job_id}.mp4")
 
 
 @app.get("/api/videos/{job_id}/narrated.mp4")
@@ -378,7 +447,16 @@ def get_narrated_video(job_id: str) -> FileResponse:
     path = _library_narrated_video_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Narrated video not found")
-    return FileResponse(path, media_type="video/mp4", filename=path.name)
+    return FileResponse(path, media_type="video/mp4")
+
+
+@app.get("/api/download/videos/{job_id}/narrated.mp4")
+def download_narrated_video(job_id: str) -> FileResponse:
+    _validate_job_id(job_id)
+    path = _library_narrated_video_path(job_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Narrated video not found")
+    return FileResponse(path, media_type="video/mp4", filename=f"{job_id}.narrated.mp4")
 
 
 @app.get("/api/captions/{job_id}.srt")
@@ -387,7 +465,16 @@ def get_captions_srt(job_id: str) -> FileResponse:
     path = _library_captions_srt_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Captions not found")
-    return FileResponse(path, media_type="application/x-subrip", filename=path.name)
+    return FileResponse(path, media_type="application/x-subrip")
+
+
+@app.get("/api/download/captions/{job_id}.srt")
+def download_captions_srt(job_id: str) -> FileResponse:
+    _validate_job_id(job_id)
+    path = _library_captions_srt_path(job_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Captions not found")
+    return FileResponse(path, media_type="application/x-subrip", filename=f"{job_id}.captions.srt")
 
 
 @app.get("/api/captions/{job_id}.json")
@@ -396,7 +483,16 @@ def get_captions_json(job_id: str) -> FileResponse:
     path = _library_captions_json_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Captions not found")
-    return FileResponse(path, media_type="application/json", filename=path.name)
+    return FileResponse(path, media_type="application/json")
+
+
+@app.get("/api/download/captions/{job_id}.json")
+def download_captions_json(job_id: str) -> FileResponse:
+    _validate_job_id(job_id)
+    path = _library_captions_json_path(job_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Captions not found")
+    return FileResponse(path, media_type="application/json", filename=f"{job_id}.captions.json")
 
 
 @app.get("/api/audio/{job_id}.mp3")
@@ -405,7 +501,16 @@ def get_narration_audio(job_id: str) -> FileResponse:
     path = _library_narration_audio_path(job_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Narration audio not found")
-    return FileResponse(path, media_type="audio/mpeg", filename=path.name)
+    return FileResponse(path, media_type="audio/mpeg")
+
+
+@app.get("/api/download/audio/{job_id}.mp3")
+def download_narration_audio(job_id: str) -> FileResponse:
+    _validate_job_id(job_id)
+    path = _library_narration_audio_path(job_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Narration audio not found")
+    return FileResponse(path, media_type="audio/mpeg", filename=f"{job_id}.narration.mp3")
 
 
 @app.get("/api/library", response_model=List[LibraryItem])
@@ -413,11 +518,28 @@ def library(request: Request) -> List[LibraryItem]:
     base = str(request.base_url).rstrip("/")
     items = []
     if LIBRARY_DIR.exists():
-        for meta_path in sorted(LIBRARY_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        entries: List[tuple[float, Path, Dict[str, Any]]] = []
+        for meta_path in LIBRARY_DIR.glob("*.json"):
             try:
                 meta = json.loads(meta_path.read_text())
             except Exception:
                 continue
+            if not isinstance(meta, dict):
+                continue
+            job_id = str(meta.get("job_id", "")).strip()
+            if not job_id:
+                continue
+            created_at = str(meta.get("created_at", "")).strip()
+            sort_ts = meta_path.stat().st_mtime
+            if created_at:
+                try:
+                    # ISO-like strings sort by time; parse for robustness.
+                    sort_ts = _dt.datetime.fromisoformat(created_at.replace("Z", "")).timestamp()
+                except Exception:
+                    sort_ts = meta_path.stat().st_mtime
+            entries.append((sort_ts, meta_path, meta))
+
+        for _, _, meta in sorted(entries, key=lambda t: t[0], reverse=True):
             job_id = str(meta.get("job_id", "")).strip()
             if not job_id:
                 continue
@@ -504,8 +626,29 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
         export_final_video(generation=result.final.generation, output_path=out_path)
 
         post = {}
-        if req.backend == "veo":
-            post = _postprocess_video_assets(job_id=job_id, video_path=out_path)
+        postprocess_status: Literal["idle", "running", "done", "error"] = "idle"
+        if req.backend == "veo" and (req.postprocess_mode or "voiceover") != "off":
+            _update_job(job_id, postprocess_status="running", postprocess_error=None)
+            post = _postprocess_video_assets(
+                job_id=job_id,
+                video_path=out_path,
+                mode=req.postprocess_mode if req.postprocess_mode != "off" else "voiceover",
+            )
+            produced_any = any(
+                post.get(k)
+                for k in (
+                    "captions_srt_path",
+                    "captions_json_path",
+                    "narration_audio_path",
+                    "narrated_video_path",
+                )
+            )
+            if post.get("error"):
+                postprocess_status = "error"
+            elif produced_any:
+                postprocess_status = "done"
+            else:
+                postprocess_status = "idle"
 
         meta = {
             "job_id": job_id,
@@ -520,6 +663,8 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             "has_captions_json": bool(post.get("captions_json_path")),
             "has_narration_audio": bool(post.get("narration_audio_path")),
             "has_narrated_video": bool(post.get("narrated_video_path")),
+            "postprocess_mode": req.postprocess_mode,
+            "postprocess_status": postprocess_status,
             "postprocess_error": post.get("error"),
             "generation": {
                 "backend": result.final.generation.backend,
@@ -557,10 +702,51 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
             captions_json_path=post.get("captions_json_path"),
             narration_audio_path=post.get("narration_audio_path"),
             narrated_video_path=post.get("narrated_video_path"),
+            postprocess_status=postprocess_status,
             postprocess_error=post.get("error"),
         )
     except Exception as e:
         _update_job(job_id, status="error", error=str(e))
+
+
+def _run_postprocess_job(*, job_id: str, video_path: Path, mode: str, force: bool) -> None:
+    try:
+        _update_job(job_id, postprocess_status="running", postprocess_error=None, postprocess_mode=mode)
+
+        post = _postprocess_video_assets(job_id=job_id, video_path=video_path, mode=mode, force=force)
+
+        produced_any = any(
+            post.get(k)
+            for k in (
+                "captions_srt_path",
+                "captions_json_path",
+                "narration_audio_path",
+                "narrated_video_path",
+            )
+        )
+        if post.get("error"):
+            postprocess_status: Literal["idle", "running", "done", "error"] = "error"
+        elif produced_any:
+            postprocess_status = "done"
+        else:
+            postprocess_status = "idle"
+
+        _update_job(
+            job_id,
+            captions_summary=post.get("captions_summary"),
+            captions_srt_path=post.get("captions_srt_path"),
+            captions_json_path=post.get("captions_json_path"),
+            narration_audio_path=post.get("narration_audio_path"),
+            narrated_video_path=post.get("narrated_video_path"),
+            postprocess_status=postprocess_status,
+            postprocess_error=post.get("error"),
+            postprocess_mode=mode,
+        )
+
+        _update_library_meta_postprocess(job_id=job_id, post=post, postprocess_status=postprocess_status, mode=mode)
+    finally:
+        with _postprocess_jobs_lock:
+            _postprocess_jobs_in_flight.discard(job_id)
 
 
 def _apply_overrides(spec: AnimationSpec, req: GenerateRequest) -> AnimationSpec:
@@ -627,7 +813,13 @@ def _load_deepgram_tts_config() -> Optional[DeepgramTTSConfig]:
     return DeepgramTTSConfig(api_key=api_key, model=model, encoding=encoding)
 
 
-def _postprocess_video_assets(*, job_id: str, video_path: Path) -> Dict[str, Optional[str]]:
+def _postprocess_video_assets(
+    *,
+    job_id: str,
+    video_path: Path,
+    mode: Literal["captions", "voiceover"] = "voiceover",
+    force: bool = False,
+) -> Dict[str, Optional[str]]:
     """
     Best-effort post-process:
     - TwelveLabs captioning (+ narration script)
@@ -643,51 +835,124 @@ def _postprocess_video_assets(*, job_id: str, video_path: Path) -> Dict[str, Opt
         "error": None,
     }
 
-    cfg = _load_twelvelabs_config()
-    if cfg is None:
+    mode = (mode or "voiceover").strip().lower()
+    if mode not in {"captions", "voiceover"}:
+        out["error"] = "mode must be one of: captions, voiceover"
         return out
 
-    try:
-        captions = generate_captions_with_twelvelabs(video_path=video_path, config=cfg)
+    captions_json_path = _library_captions_json_path(job_id)
+    captions_srt_path = _library_captions_srt_path(job_id)
+    audio_path = _library_narration_audio_path(job_id)
+    narrated_path = _library_narrated_video_path(job_id)
 
-        captions_payload = {
-            "summary": captions.summary,
-            "captions": [{"start_s": s.start_s, "end_s": s.end_s, "text": s.text} for s in captions.segments],
-            "narration": captions.narration,
-            "medical_uncertainties": captions.medical_uncertainties,
-        }
-
-        captions_json_path = _library_captions_json_path(job_id)
-        captions_json_path.write_text(json.dumps(captions_payload, ensure_ascii=False, indent=2))
-        captions_srt_path = _library_captions_srt_path(job_id)
-        captions_srt_path.write_text(captions.to_srt())
-
-        out["captions_summary"] = captions.summary
+    if captions_json_path.exists() and captions_srt_path.exists() and not force:
         out["captions_json_path"] = str(captions_json_path)
         out["captions_srt_path"] = str(captions_srt_path)
+        try:
+            payload = json.loads(captions_json_path.read_text())
+            if isinstance(payload, dict):
+                out["captions_summary"] = str(payload.get("summary") or "") or None
+        except Exception:
+            pass
+    else:
+        cfg = _load_twelvelabs_config()
+        if cfg is None:
+            return out
+
+        try:
+            captions = generate_captions_with_twelvelabs(video_path=video_path, config=cfg)
+
+            captions_payload = {
+                "summary": captions.summary,
+                "captions": [{"start_s": s.start_s, "end_s": s.end_s, "text": s.text} for s in captions.segments],
+                "narration": captions.narration,
+                "medical_uncertainties": captions.medical_uncertainties,
+            }
+
+            captions_json_path.write_text(json.dumps(captions_payload, ensure_ascii=False, indent=2))
+            captions_srt_path.write_text(captions.to_srt())
+
+            out["captions_summary"] = captions.summary
+            out["captions_json_path"] = str(captions_json_path)
+            out["captions_srt_path"] = str(captions_srt_path)
+        except Exception as e:
+            out["error"] = str(e)
+            return out
+
+    try:
+        if mode == "captions":
+            return out
+
+        narration_text: Optional[str] = None
+        if captions_json_path.exists():
+            try:
+                payload = json.loads(captions_json_path.read_text())
+                if isinstance(payload, dict):
+                    narration_text = str(payload.get("narration") or "").strip() or None
+            except Exception:
+                narration_text = None
 
         tts_cfg = _load_deepgram_tts_config()
-        if tts_cfg is None or not captions.narration:
+        if tts_cfg is None:
+            return out
+        if not narration_text:
+            out["error"] = "No narration script available for voiceover"
             return out
 
-        audio_path = _library_narration_audio_path(job_id)
-        try:
-            synthesize_narration_with_deepgram(text=captions.narration, output_path=audio_path, config=tts_cfg)
+        if audio_path.exists() and not force:
             out["narration_audio_path"] = str(audio_path)
-        except Exception as e:
-            out["error"] = f"Deepgram TTS failed: {e}"
-            return out
+        else:
+            try:
+                synthesize_narration_with_deepgram(text=narration_text, output_path=audio_path, config=tts_cfg)
+                out["narration_audio_path"] = str(audio_path)
+            except Exception as e:
+                out["error"] = f"Deepgram TTS failed: {e}"
+                return out
 
-        narrated_path = _library_narrated_video_path(job_id)
-        try:
-            mux_audio_ffmpeg(video_path=video_path, audio_path=audio_path, output_path=narrated_path)
+        if narrated_path.exists() and not force:
             out["narrated_video_path"] = str(narrated_path)
-        except VideoEncodeError as e:
-            out["error"] = f"ffmpeg mux failed: {e}"
+        else:
+            try:
+                mux_audio_ffmpeg(video_path=video_path, audio_path=audio_path, output_path=narrated_path)
+                out["narrated_video_path"] = str(narrated_path)
+            except VideoEncodeError as e:
+                out["error"] = f"ffmpeg mux failed: {e}"
         return out
     except Exception as e:
         out["error"] = str(e)
         return out
+
+
+def _update_library_meta_postprocess(
+    *,
+    job_id: str,
+    post: Dict[str, Optional[str]],
+    postprocess_status: Literal["idle", "running", "done", "error"],
+    mode: str,
+) -> None:
+    meta_path = LIBRARY_DIR / f"{job_id}.json"
+    if not meta_path.exists():
+        return
+    try:
+        meta = json.loads(meta_path.read_text())
+    except Exception:
+        return
+    if not isinstance(meta, dict):
+        return
+
+    meta["captions_summary"] = post.get("captions_summary") or meta.get("captions_summary")
+    meta["has_captions_srt"] = _library_captions_srt_path(job_id).exists()
+    meta["has_captions_json"] = _library_captions_json_path(job_id).exists()
+    meta["has_narration_audio"] = _library_narration_audio_path(job_id).exists()
+    meta["has_narrated_video"] = _library_narrated_video_path(job_id).exists()
+    meta["postprocess_mode"] = mode
+    meta["postprocess_status"] = postprocess_status
+    meta["postprocess_error"] = post.get("error")
+
+    try:
+        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+    except Exception:
+        return
 
 
 def _default_image_negative_prompt() -> str:

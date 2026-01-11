@@ -20,7 +20,7 @@ function backendBase() {
   return `https://${cleaned}`;
 }
 
-async function apiFetch(path, init) {
+async function apiFetchJson(path, init) {
   const base = backendBase();
   const url = base ? `${base}${path}` : path;
   const res = await fetch(url, init);
@@ -31,67 +31,237 @@ async function apiFetch(path, init) {
   return res.json();
 }
 
+async function apiFetchText(urlOrPath) {
+  const base = backendBase();
+  const url = base && urlOrPath.startsWith("/") ? `${base}${urlOrPath}` : urlOrPath;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new ApiError(res.status, text);
+  }
+  return res.text();
+}
+
+function clampIso(iso) {
+  const s = String(iso || "").trim();
+  if (!s) return "";
+  return s.replace("T", " ").replace("Z", "");
+}
+
+function parseSrtTimestamp(ts) {
+  const m = String(ts || "")
+    .trim()
+    .match(/^(\d+):(\d+):(\d+)[,.](\d+)$/);
+  if (!m) return 0;
+  const [, hh, mm, ss, ms] = m;
+  return Number(hh) * 3600 + Number(mm) * 60 + Number(ss) + Number(ms) / 1000;
+}
+
+function parseSrt(srtText) {
+  const text = String(srtText || "").replace(/\r/g, "");
+  const blocks = text.split(/\n\n+/);
+  const segments = [];
+  for (const block of blocks) {
+    const lines = block.split("\n").map((l) => l.trimEnd());
+    const timeLineIndex = lines.findIndex((l) => l.includes("-->"));
+    if (timeLineIndex === -1) continue;
+    const timeLine = lines[timeLineIndex];
+    const [startRaw, endRaw] = timeLine.split("-->").map((s) => s.trim());
+    const start = parseSrtTimestamp(startRaw);
+    const end = parseSrtTimestamp(endRaw);
+    const captionLines = lines.slice(timeLineIndex + 1).filter((l) => l.trim());
+    const caption = captionLines.join(" ").trim();
+    if (!caption) continue;
+    segments.push({ start, end, text: caption });
+  }
+  return segments;
+}
+
+function DownloadLink({ jobId, kind, children }) {
+  const href = useMemo(() => {
+    const base = backendBase();
+    let path = "";
+    if (kind === "video") path = `/api/download/videos/${jobId}.mp4`;
+    if (kind === "narrated") path = `/api/download/videos/${jobId}/narrated.mp4`;
+    if (kind === "captions_srt") path = `/api/download/captions/${jobId}.srt`;
+    if (kind === "captions_json") path = `/api/download/captions/${jobId}.json`;
+    if (kind === "audio") path = `/api/download/audio/${jobId}.mp3`;
+    if (!path) return "";
+    return base ? `${base}${path}` : path;
+  }, [jobId, kind]);
+
+  if (!href) return null;
+  return (
+    <a className="actionBtn" href={href} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+      {children}
+    </a>
+  );
+}
+
+function FeedItem({ item, isActive, muted, onToggleMute, postprocess, onPostprocess, setRef }) {
+  const videoRef = useRef(null);
+  const captionsRef = useRef(null);
+  const lastCaptionRef = useRef("");
+  const [caption, setCaption] = useState("");
+
+  const src = item?.narrated_video_url || item?.video_url || "";
+  const hasCaptions = Boolean(item?.captions_srt_url);
+  const hasVoiceover = Boolean(item?.narrated_video_url);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (!isActive) {
+      v.pause();
+      return;
+    }
+    v.play().catch(() => {});
+  }, [isActive, src]);
+
+  useEffect(() => {
+    if (!isActive) return;
+    if (!hasCaptions) return;
+    if (captionsRef.current) return;
+    let cancelled = false;
+    apiFetchText(item.captions_srt_url)
+      .then((txt) => {
+        if (cancelled) return;
+        captionsRef.current = parseSrt(txt);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isActive, hasCaptions, item?.captions_srt_url]);
+
+  function togglePlay() {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) v.play().catch(() => {});
+    else v.pause();
+  }
+
+  function onTimeUpdate() {
+    if (!isActive) return;
+    const v = videoRef.current;
+    const segs = captionsRef.current || [];
+    if (!v || segs.length === 0) return;
+    const t = v.currentTime || 0;
+    const seg = segs.find((s) => t >= s.start && t <= s.end);
+    const next = seg?.text || "";
+    if (next === lastCaptionRef.current) return;
+    lastCaptionRef.current = next;
+    setCaption(next);
+  }
+
+  const busy = postprocess?.status === "running";
+  const err = postprocess?.status === "error" ? postprocess?.error : "";
+
+  return (
+    <div ref={setRef} className="feedItem" data-job-id={item.job_id}>
+      <div className="videoFrame" onClick={togglePlay}>
+        <video
+          className="video"
+          ref={videoRef}
+          src={src}
+          playsInline
+          loop
+          preload="metadata"
+          muted={muted}
+          onTimeUpdate={onTimeUpdate}
+        />
+        <div className="videoOverlayTop" />
+        <div className="videoOverlayBottom" />
+
+        <div className="meta">
+          <div className="metaTitle">{item.prompt || item.job_id}</div>
+          <div className="metaSubtitle">
+            {clampIso(item.created_at)}
+            {item.report_summary ? ` • ${item.report_summary}` : ""}
+            {err ? ` • ${String(err).slice(0, 120)}` : ""}
+          </div>
+        </div>
+
+        {caption ? <div className="caption">{caption}</div> : null}
+
+        <div className="actions" onClick={(e) => e.stopPropagation()}>
+          <button
+            className="actionBtn"
+            disabled={busy || hasCaptions}
+            onClick={() => onPostprocess(item.job_id, "captions")}
+          >
+            {busy && postprocess?.mode === "captions" ? "…" : hasCaptions ? "CC ✓" : "CC"}
+          </button>
+          <button
+            className="actionBtn"
+            disabled={busy || hasVoiceover}
+            onClick={() => onPostprocess(item.job_id, "voiceover")}
+          >
+            {busy && postprocess?.mode === "voiceover" ? "…" : hasVoiceover ? "VO ✓" : "VO"}
+          </button>
+          <button className="actionBtn" onClick={onToggleMute}>
+            {muted ? "Sound" : "Mute"}
+          </button>
+          <DownloadLink jobId={item.job_id} kind={hasVoiceover ? "narrated" : "video"}>
+            DL
+          </DownloadLink>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
+  const [creatorOpen, setCreatorOpen] = useState(false);
+  const [muted, setMuted] = useState(true);
+
   const [imageDataUrl, setImageDataUrl] = useState("");
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageModel, setImageModel] = useState("imagen-3.0-generate-001");
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [isCheckingImage, setIsCheckingImage] = useState(false);
   const [imageValidation, setImageValidation] = useState(null);
+
   const [prompt, setPrompt] = useState("");
   const [target, setTarget] = useState("");
   const [rewriteMode, setRewriteMode] = useState("gemini");
   const [veoModel, setVeoModel] = useState("veo-3.1-generate-preview");
   const [useBiomedclip, setUseBiomedclip] = useState(true);
+  const [postprocessMode, setPostprocessMode] = useState("voiceover");
+
   const [jobId, setJobId] = useState(null);
   const [job, setJob] = useState(null);
   const [error, setError] = useState("");
-  const [library, setLibrary] = useState([]);
 
+  const [library, setLibrary] = useState([]);
+  const [activeJobId, setActiveJobId] = useState(null);
+  const [postprocessById, setPostprocessById] = useState({});
+
+  const feedRef = useRef(null);
+  const itemEls = useRef(new Map());
   const pollRef = useRef(null);
+  const postprocessPollersRef = useRef({});
+
   const videoUrl = useMemo(() => {
     if (!jobId) return "";
     const base = backendBase();
     const path = `/api/videos/${jobId}.mp4`;
     return base ? `${base}${path}` : path;
   }, [jobId]);
-  const captionsSrtUrl = useMemo(() => {
-    if (!jobId) return "";
-    const base = backendBase();
-    const path = `/api/captions/${jobId}.srt`;
-    return base ? `${base}${path}` : path;
-  }, [jobId]);
-  const captionsJsonUrl = useMemo(() => {
-    if (!jobId) return "";
-    const base = backendBase();
-    const path = `/api/captions/${jobId}.json`;
-    return base ? `${base}${path}` : path;
-  }, [jobId]);
-  const narrationAudioUrl = useMemo(() => {
-    if (!jobId) return "";
-    const base = backendBase();
-    const path = `/api/audio/${jobId}.mp3`;
-    return base ? `${base}${path}` : path;
-  }, [jobId]);
-  const narratedVideoUrl = useMemo(() => {
-    if (!jobId) return "";
-    const base = backendBase();
-    const path = `/api/videos/${jobId}/narrated.mp4`;
-    return base ? `${base}${path}` : path;
-  }, [jobId]);
 
   async function refreshLibrary() {
     try {
-      const items = await apiFetch("/api/library");
+      const items = await apiFetchJson("/api/library");
       setLibrary(items);
-    } catch (e) {
-      // Non-fatal if the backend isn't up yet.
+      if (!activeJobId && items.length > 0) setActiveJobId(items[0].job_id);
+    } catch {
+      // Non-fatal if backend isn't up yet.
     }
   }
 
   async function refreshJob(id) {
     try {
-      const data = await apiFetch(`/api/jobs/${id}`);
+      const data = await apiFetchJson(`/api/jobs/${id}`);
       setJob(data.job);
       if (data.job.status === "done" || data.job.status === "error") {
         if (pollRef.current) clearInterval(pollRef.current);
@@ -115,7 +285,7 @@ export default function Home() {
     setJob(null);
     setJobId(null);
     if (!prompt.trim()) {
-      setError("Enter a prompt.");
+      setError("Enter an animation prompt.");
       return;
     }
     if (!imageDataUrl) {
@@ -124,7 +294,7 @@ export default function Home() {
     }
 
     try {
-      const resp = await apiFetch("/api/generate", {
+      const resp = await apiFetchJson("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -134,6 +304,7 @@ export default function Home() {
           prompt_rewrite: rewriteMode,
           gemini_model: "gemini-2.0-flash",
           veo_model: veoModel,
+          postprocess_mode: postprocessMode,
           use_biomedclip: false,
           biomedclip_target: null
         })
@@ -141,39 +312,6 @@ export default function Home() {
       setJobId(resp.job_id);
       await refreshJob(resp.job_id);
       pollRef.current = setInterval(() => refreshJob(resp.job_id).catch(() => {}), 2000);
-    } catch (e) {
-      setError(String(e?.message || e));
-    }
-  }
-
-  async function onTestNoVeo() {
-    setError("");
-    setJob(null);
-    setJobId(null);
-
-    try {
-      const resp = await apiFetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: prompt.trim() ? prompt.trim() : "demo: falling red dot",
-          backend: "demo",
-          input_image: imageDataUrl || null,
-          prompt_rewrite: "none",
-          use_biomedclip: false,
-          max_rounds: 1,
-          candidates: 1,
-          medical_threshold: 0.0,
-          physics_threshold: 0.0,
-          fps: 8,
-          duration_s: 2.0,
-          width: 256,
-          height: 256
-        })
-      });
-      setJobId(resp.job_id);
-      await refreshJob(resp.job_id);
-      pollRef.current = setInterval(() => refreshJob(resp.job_id).catch(() => {}), 500);
     } catch (e) {
       setError(String(e?.message || e));
     }
@@ -214,7 +352,7 @@ export default function Home() {
     setIsGeneratingImage(true);
     setImageValidation(null);
     try {
-      const resp = await apiFetch("/api/images/generate", {
+      const resp = await apiFetchJson("/api/images/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -242,7 +380,7 @@ export default function Home() {
     setError("");
     setIsCheckingImage(true);
     try {
-      const resp = await apiFetch("/api/images/validate", {
+      const resp = await apiFetchJson("/api/images/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -260,232 +398,277 @@ export default function Home() {
     }
   }
 
+  async function onPostprocess(jobId, mode) {
+    setError("");
+    setPostprocessById((prev) => ({
+      ...prev,
+      [jobId]: { status: "running", mode, error: "" }
+    }));
+
+    if (postprocessPollersRef.current[jobId]) {
+      clearInterval(postprocessPollersRef.current[jobId]);
+      delete postprocessPollersRef.current[jobId];
+    }
+
+    try {
+      const resp = await apiFetchJson(`/api/jobs/${jobId}/postprocess`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode, force: false })
+      });
+
+      const poll = async () => {
+        try {
+          const data = await apiFetchJson(resp.status_url);
+          const ps = String(data?.job?.postprocess_status || "").trim();
+          const pe = String(data?.job?.postprocess_error || "").trim();
+          if (ps && ps !== "running") {
+            clearInterval(postprocessPollersRef.current[jobId]);
+            delete postprocessPollersRef.current[jobId];
+            setPostprocessById((prev) => ({
+              ...prev,
+              [jobId]: { status: ps === "error" ? "error" : "done", mode, error: pe }
+            }));
+            await refreshLibrary();
+          }
+        } catch {
+          // Keep polling for a bit.
+        }
+      };
+      postprocessPollersRef.current[jobId] = setInterval(() => poll(), 2000);
+      await poll();
+    } catch (e) {
+      setPostprocessById((prev) => ({
+        ...prev,
+        [jobId]: { status: "error", mode, error: String(e?.message || e) }
+      }));
+      setError(String(e?.message || e));
+    }
+  }
+
   useEffect(() => {
     refreshLibrary();
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      const pollers = postprocessPollersRef.current || {};
+      for (const k of Object.keys(pollers)) clearInterval(pollers[k]);
     };
   }, []);
 
+  useEffect(() => {
+    const root = feedRef.current;
+    if (!root) return;
+
+    const obs = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const id = entry.target?.getAttribute?.("data-job-id");
+          if (id) setActiveJobId(id);
+        }
+      },
+      { root, threshold: 0.6 }
+    );
+
+    for (const el of itemEls.current.values()) obs.observe(el);
+    return () => obs.disconnect();
+  }, [library]);
+
   return (
-    <main className="stack">
-      <header className="header">
+    <div className="app">
+      <header className="topBar">
         <div>
-          <h1>Medical Diffusion</h1>
-          <p className="muted">Image (BiomedCLIP-checked) + text → Veo 3.1 animation (max 1 image reprompt).</p>
+          <div className="brandTitle">Medical Diffusion</div>
+          <div className="brandSubtitle">Image + text → Veo 3.1 video • BiomedCLIP checks images • Add captions/VO anytime</div>
         </div>
-        <a className="link" href="https://vercel.com" target="_blank" rel="noreferrer">
-          Deploy on Vercel
-        </a>
-      </header>
-
-      <section className="card">
-        <h2>Generate</h2>
-        <div className="grid2">
-          <label className="field">
-            <span>Upload a medical image (PNG/JPG)</span>
-            <input type="file" accept="image/*" onChange={onUploadImage} />
-          </label>
-          <div className="field">
-            <span>Or generate one with AI</span>
-            <div className="row" style={{ marginTop: 0 }}>
-              <input
-                value={imagePrompt}
-                onChange={(e) => setImagePrompt(e.target.value)}
-                placeholder='e.g. "axial CT slice of the liver, clinical, grayscale, no text"'
-              />
-              <button className="btnSecondary" onClick={onGenerateImage} disabled={isGeneratingImage}>
-                {isGeneratingImage ? "Generating…" : "Generate image"}
-              </button>
-            </div>
-            <div className="row" style={{ marginTop: 8 }}>
-              <select value={imageModel} onChange={(e) => setImageModel(e.target.value)}>
-                <option value="imagen-3.0-generate-001">imagen-3.0-generate-001</option>
-                <option value="imagen-3.0-fast-generate-001">imagen-3.0-fast-generate-001</option>
-              </select>
-              <label className="row muted" style={{ gap: 8, marginTop: 0 }}>
-                <input
-                  type="checkbox"
-                  checked={useBiomedclip}
-                  onChange={(e) => setUseBiomedclip(e.target.checked)}
-                />
-                <span>Validate image with BiomedCLIP (reprompt once)</span>
-              </label>
-              {imageDataUrl ? (
-                <button
-                  className="btnSecondary"
-                  onClick={() => {
-                    setImageDataUrl("");
-                    setImageValidation(null);
-                  }}
-                >
-                  Clear image
-                </button>
-              ) : null}
-            </div>
-            <label className="field" style={{ marginTop: 10 }}>
-              <span>BiomedCLIP target (optional)</span>
-              <input
-                value={target}
-                onChange={(e) => setTarget(e.target.value)}
-                placeholder='e.g. "heart" or "liver"'
-                disabled={!useBiomedclip}
-              />
-            </label>
-          </div>
-        </div>
-
-        <div className="imageRow">
-          {imageDataUrl ? (
-            <img className="imagePreview" src={imageDataUrl} alt="Selected medical image" />
-          ) : (
-            <div className="imagePlaceholder muted">No image selected yet.</div>
-          )}
-        </div>
-        {imageDataUrl && useBiomedclip ? (
-          <div className="row" style={{ marginTop: 8 }}>
-            <button className="btnSecondary" onClick={onValidateImage} disabled={isCheckingImage}>
-              {isCheckingImage ? "Checking…" : "Check image"}
-            </button>
-          </div>
-        ) : null}
-        {imageValidation?.report_summary ? (
-          <div className="muted" style={{ marginTop: 8 }}>
-            Image check: {imageValidation.report_summary}
-            {typeof imageValidation.accepted === "boolean" ? (imageValidation.accepted ? " • accepted" : " • not accepted") : ""}
-            {imageValidation.rounds ? ` • rounds=${imageValidation.rounds}` : ""}
-          </div>
-        ) : null}
-
-        <div className="grid2">
-          <label className="field">
-            <span>Animation prompt (what should happen over time)</span>
-            <input
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder='e.g. "animate red blood cells flowing through the vessel"'
-            />
-          </label>
-        </div>
-        <div className="grid2">
-          <label className="field">
-            <span>Prompt rewriting</span>
-            <select value={rewriteMode} onChange={(e) => setRewriteMode(e.target.value)}>
-              <option value="gemini">Gemini (best quality, uses quota)</option>
-              <option value="rule">Rule-based (no quota)</option>
-              <option value="none">None</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>Veo model</span>
-            <select value={veoModel} onChange={(e) => setVeoModel(e.target.value)}>
-              <option value="veo-3.1-generate-preview">veo-3.1-generate-preview</option>
-              <option value="veo-3.1-fast-generate-preview">veo-3.1-fast-generate-preview</option>
-            </select>
-          </label>
-        </div>
-        <div className="row">
-          <button className="btn" onClick={onGenerate} disabled={job?.status === "running"}>
-            {job?.status === "running" ? "Generating…" : "Generate (Veo)"}
+        <div className="topBarRight">
+          <div className="pill">{backendBase() || "same origin"}</div>
+          <button className="btn btnGhost btnSmall" onClick={() => setMuted((m) => !m)}>
+            {muted ? "Sound" : "Mute"}
           </button>
-          <button className="btnSecondary" onClick={onTestNoVeo} disabled={job?.status === "running"}>
-            Test (no Veo)
-          </button>
-          {jobId ? <span className="muted">Job: {jobId}</span> : null}
-          {job ? <span className="muted">Status: {job.status}</span> : null}
-        </div>
-        {error ? <div className="error">{error}</div> : null}
-        {job?.status === "error" ? <div className="error">{job.error || "Generation failed."}</div> : null}
-
-        {job?.status === "done" ? (
-          <div className="preview">
-            <h3>Result</h3>
-            <video className="video" controls src={videoUrl} />
-            <div className="row">
-              <a className="btnSecondary" href={videoUrl} target="_blank" rel="noreferrer">
-                Open video
-              </a>
-              <a className="btnSecondary" href={videoUrl} download={`${jobId}.mp4`}>
-                Download
-              </a>
-              {job?.narrated_video_path ? (
-                <a className="btnSecondary" href={narratedVideoUrl} target="_blank" rel="noreferrer">
-                  Open narrated
-                </a>
-              ) : null}
-              {job?.captions_srt_path ? (
-                <a className="btnSecondary" href={captionsSrtUrl} target="_blank" rel="noreferrer">
-                  Captions (SRT)
-                </a>
-              ) : null}
-              {job?.captions_json_path ? (
-                <a className="btnSecondary" href={captionsJsonUrl} target="_blank" rel="noreferrer">
-                  Captions (JSON)
-                </a>
-              ) : null}
-              {job?.narration_audio_path ? (
-                <a className="btnSecondary" href={narrationAudioUrl} target="_blank" rel="noreferrer">
-                  Narration (MP3)
-                </a>
-              ) : null}
-            </div>
-            {job.report_summary ? <p className="muted">Scores: {job.report_summary}</p> : null}
-            {job.postprocess_error ? <p className="error">Postprocess: {job.postprocess_error}</p> : null}
-          </div>
-        ) : null}
-      </section>
-
-      <section className="card">
-        <div className="row between">
-          <h2>Library</h2>
-          <button className="btnSecondary" onClick={refreshLibrary}>
+          <button className="btn btnGhost btnSmall" onClick={refreshLibrary}>
             Refresh
           </button>
+          <button className="btn btnPrimary btnSmall" onClick={() => setCreatorOpen(true)}>
+            Create
+          </button>
         </div>
+      </header>
+
+      <main className="main">
         {library.length === 0 ? (
-          <p className="muted">No saved videos yet.</p>
+          <div className="feedEmpty">
+            <div>
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>No videos yet.</div>
+              <div className="muted">Tap Create to generate your first medical animation.</div>
+            </div>
+          </div>
         ) : (
-          <div className="library">
+          <div ref={feedRef} className="feed">
             {library.map((item) => (
-              <div key={item.job_id} className="libraryItem">
-                <div className="libraryText">
-                  <div className="libraryTitle">{item.prompt || item.job_id}</div>
-                  <div className="muted">
-                    {item.created_at} {item.report_summary ? `• ${item.report_summary}` : ""}
-                  </div>
-                </div>
-                <div className="row">
-                  <a className="btnSecondary" href={item.video_url} target="_blank" rel="noreferrer">
-                    Open
-                  </a>
-                  <a className="btnSecondary" href={item.video_url} download={`${item.job_id}.mp4`}>
-                    Download
-                  </a>
-                  {item.narrated_video_url ? (
-                    <a className="btnSecondary" href={item.narrated_video_url} target="_blank" rel="noreferrer">
-                      Narrated
-                    </a>
-                  ) : null}
-                  {item.captions_srt_url ? (
-                    <a className="btnSecondary" href={item.captions_srt_url} target="_blank" rel="noreferrer">
-                      Captions
-                    </a>
-                  ) : null}
-                  {item.narration_audio_url ? (
-                    <a className="btnSecondary" href={item.narration_audio_url} target="_blank" rel="noreferrer">
-                      Audio
-                    </a>
-                  ) : null}
-                </div>
-              </div>
+              <FeedItem
+                key={item.job_id}
+                setRef={(el) => {
+                  if (el) itemEls.current.set(item.job_id, el);
+                  else itemEls.current.delete(item.job_id);
+                }}
+                item={item}
+                isActive={item.job_id === activeJobId}
+                muted={muted}
+                onToggleMute={() => setMuted((m) => !m)}
+                postprocess={postprocessById[item.job_id]}
+                onPostprocess={onPostprocess}
+              />
             ))}
           </div>
         )}
-      </section>
+      </main>
 
-      <footer className="footer muted">
-        Backend URL: {backendBase() || "(same origin)"} • Set <code>NEXT_PUBLIC_BACKEND_URL</code> in Vercel env vars.
-      </footer>
-    </main>
+      {creatorOpen ? (
+        <div className="modalOverlay" onClick={() => setCreatorOpen(false)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modalHeader">
+              <div>
+                <div className="modalTitle">Create</div>
+                <div className="muted">Upload or generate an image, then animate it.</div>
+              </div>
+              <button className="btn btnGhost btnSmall" onClick={() => setCreatorOpen(false)}>
+                Close
+              </button>
+            </div>
+
+            <div className="modalBody">
+              <div className="grid2">
+                <label className="field">
+                  <div className="label">Upload medical image</div>
+                  <input className="input" type="file" accept="image/*" onChange={onUploadImage} />
+                </label>
+                <div className="field">
+                  <div className="label">Or generate one with AI</div>
+                  <div className="row">
+                    <input
+                      className="input"
+                      value={imagePrompt}
+                      onChange={(e) => setImagePrompt(e.target.value)}
+                      placeholder='e.g. "axial CT slice of the liver, clinical, grayscale, no text"'
+                    />
+                    <button className="btn btnGhost btnSmall" onClick={onGenerateImage} disabled={isGeneratingImage}>
+                      {isGeneratingImage ? "…" : "Generate"}
+                    </button>
+                  </div>
+                  <div className="row">
+                    <select className="select" value={imageModel} onChange={(e) => setImageModel(e.target.value)}>
+                      <option value="imagen-3.0-generate-001">imagen-3.0-generate-001</option>
+                      <option value="imagen-3.0-fast-generate-001">imagen-3.0-fast-generate-001</option>
+                    </select>
+                    <label className="chip">
+                      <input
+                        type="checkbox"
+                        checked={useBiomedclip}
+                        onChange={(e) => setUseBiomedclip(e.target.checked)}
+                      />
+                      <span className="muted">BiomedCLIP verify (reprompt once)</span>
+                    </label>
+                    {imageDataUrl ? (
+                      <button
+                        className="btn btnGhost btnSmall"
+                        onClick={() => {
+                          setImageDataUrl("");
+                          setImageValidation(null);
+                        }}
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                  <label className="field">
+                    <div className="label">BiomedCLIP target (optional)</div>
+                    <input
+                      className="input"
+                      value={target}
+                      onChange={(e) => setTarget(e.target.value)}
+                      placeholder='e.g. "heart"'
+                      disabled={!useBiomedclip}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {imageDataUrl ? <img className="imagePreview" src={imageDataUrl} alt="Selected medical" /> : null}
+
+              {imageDataUrl && useBiomedclip ? (
+                <div className="row">
+                  <button className="btn btnGhost btnSmall" onClick={onValidateImage} disabled={isCheckingImage}>
+                    {isCheckingImage ? "Checking…" : "Check image"}
+                  </button>
+                  {imageValidation?.report_summary ? (
+                    <div className="muted">Image: {imageValidation.report_summary}</div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div className="divider" />
+
+              <label className="field">
+                <div className="label">Animation prompt</div>
+                <input
+                  className="input"
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder='e.g. "animate red blood cells flowing through the vessel"'
+                />
+              </label>
+
+              <div className="grid2">
+                <label className="field">
+                  <div className="label">Post-process</div>
+                  <select className="select" value={postprocessMode} onChange={(e) => setPostprocessMode(e.target.value)}>
+                    <option value="off">Off</option>
+                    <option value="captions">Captions</option>
+                    <option value="voiceover">Voiceover + captions</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <div className="label">Prompt rewrite</div>
+                  <select className="select" value={rewriteMode} onChange={(e) => setRewriteMode(e.target.value)}>
+                    <option value="gemini">Gemini</option>
+                    <option value="rule">Rule-based</option>
+                    <option value="none">None</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <div className="label">Veo model</div>
+                  <select className="select" value={veoModel} onChange={(e) => setVeoModel(e.target.value)}>
+                    <option value="veo-3.1-generate-preview">veo-3.1-generate-preview</option>
+                    <option value="veo-3.1-fast-generate-preview">veo-3.1-fast-generate-preview</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className="row">
+                <button className="btn btnPrimary" onClick={onGenerate} disabled={job?.status === "running"}>
+                  {job?.status === "running" ? "Generating…" : "Generate"}
+                </button>
+                {jobId ? <div className="muted">Job: {jobId}</div> : null}
+                {job ? <div className="muted">Status: {job.status}</div> : null}
+              </div>
+
+              {error ? <div className="error">{error}</div> : null}
+              {job?.status === "error" ? <div className="error">{job.error || "Generation failed."}</div> : null}
+
+              {job?.status === "done" ? (
+                <>
+                  <div className="divider" />
+                  <div className="muted">
+                    Done. Scroll the feed to find it. {job.report_summary ? `Scores: ${job.report_summary}` : ""}
+                  </div>
+                  <video className="videoPreview" controls src={videoUrl} />
+                </>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }

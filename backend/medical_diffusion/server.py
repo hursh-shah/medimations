@@ -187,6 +187,7 @@ class LibraryItem(BaseModel):
     captions_json_url: Optional[str] = None
     narration_audio_url: Optional[str] = None
     narrated_video_url: Optional[str] = None
+    extended_from: Optional[str] = None
 
 
 class PostprocessRequest(BaseModel):
@@ -202,6 +203,30 @@ class PostprocessResponse(BaseModel):
 class DeleteAssetsResponse(BaseModel):
     job_id: str
     deleted: List[str]
+
+
+class ExtendRequest(BaseModel):
+    """Request to extend an existing video."""
+    prompt: Optional[str] = Field(
+        default=None,
+        description="Optional prompt/hint for the video extension. If use_gemini=True, this is a hint; otherwise it's required.",
+    )
+    use_gemini: bool = Field(
+        default=True,
+        description="If True, use Gemini to generate the continuation prompt from the original + hint",
+    )
+    gemini_model: str = "gemini-3.0-flash"
+    veo_model: str = "veo-3.1-generate-preview"
+    veo_aspect_ratio: str = "9:16"
+    veo_resolution: str = "720p"
+    postprocess_mode: Literal["off", "captions", "voiceover"] = "voiceover"
+
+
+class ExtendResponse(BaseModel):
+    """Response from extend endpoint."""
+    new_job_id: str
+    source_job_id: str
+    status_url: str
 
 
 app = FastAPI(title="Medical Diffusion API", version="0.1.0")
@@ -439,6 +464,245 @@ def delete_captions(job_id: str) -> DeleteAssetsResponse:
     return DeleteAssetsResponse(job_id=job_id, deleted=deleted)
 
 
+_extend_jobs_lock = threading.Lock()
+_extend_jobs_in_flight: set[str] = set()
+
+
+@app.post("/api/jobs/{job_id}/extend", response_model=ExtendResponse)
+def extend_video(job_id: str, req: ExtendRequest) -> ExtendResponse:
+    """
+    Extend an existing video using Veo's video-to-video continuation.
+    
+    This creates a new job that extends the video from the specified job_id.
+    If use_gemini=True, Gemini generates a continuation prompt based on the
+    original prompt and any user-provided hint.
+    """
+    _validate_job_id(job_id)
+
+    # Find the source video
+    video_path = _library_video_path(job_id)
+    if not video_path.exists():
+        # Try narrated version
+        narrated = _library_narrated_video_path(job_id)
+        if narrated.exists():
+            video_path = narrated
+        else:
+            raise HTTPException(status_code=404, detail="Source video not found")
+
+    # Load original job metadata to get the original prompt
+    meta_path = LIBRARY_DIR / f"{job_id}.json"
+    original_prompt = ""
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text())
+            original_prompt = str(meta.get("final_prompt") or meta.get("prompt") or "").strip()
+        except Exception:
+            pass
+    
+    if not original_prompt:
+        # Fallback: try to get from job state
+        job = _load_job(job_id)
+        if job:
+            original_prompt = job.prompt
+
+    # Validate we have what we need
+    user_prompt_provided = bool((req.prompt or "").strip())
+    
+    if not req.use_gemini and not user_prompt_provided:
+        raise HTTPException(
+            status_code=400,
+            detail="prompt is required when use_gemini=False"
+        )
+    
+    # When using Gemini, we need either the original prompt or a user hint
+    # to generate a meaningful continuation
+    if req.use_gemini and not original_prompt and not user_prompt_provided:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not find original prompt for this video. Please provide an extension prompt/hint."
+        )
+
+    # Create new job for the extension
+    new_job_id = str(uuid.uuid4())
+    extension_prompt = (req.prompt or "").strip()
+    
+    new_job = JobState(
+        job_id=new_job_id,
+        prompt=f"[Extension of {job_id}] {extension_prompt}" if extension_prompt else f"[Extension of {job_id}]",
+        backend="veo",
+        prompt_rewrite="gemini" if req.use_gemini else "none",
+        gemini_model=req.gemini_model,
+        postprocess_mode=req.postprocess_mode,
+    )
+    with _jobs_lock:
+        _jobs[new_job_id] = new_job
+    _persist_job(new_job)
+
+    # Prevent duplicate extend jobs on same source
+    with _extend_jobs_lock:
+        if job_id in _extend_jobs_in_flight:
+            raise HTTPException(status_code=409, detail="Extension already in progress for this video")
+        _extend_jobs_in_flight.add(job_id)
+
+    # Run extension in background
+    thread = threading.Thread(
+        target=_run_extend_job,
+        kwargs={
+            "new_job_id": new_job_id,
+            "source_job_id": job_id,
+            "source_video_path": video_path,
+            "original_prompt": original_prompt,
+            "user_prompt": (req.prompt or "").strip(),
+            "use_gemini": req.use_gemini,
+            "gemini_model": req.gemini_model,
+            "veo_model": req.veo_model,
+            "veo_aspect_ratio": req.veo_aspect_ratio,
+            "veo_resolution": req.veo_resolution,
+            "postprocess_mode": req.postprocess_mode,
+        },
+        daemon=True,
+    )
+    thread.start()
+
+    return ExtendResponse(
+        new_job_id=new_job_id,
+        source_job_id=job_id,
+        status_url=f"/api/jobs/{new_job_id}",
+    )
+
+
+def _run_extend_job(
+    *,
+    new_job_id: str,
+    source_job_id: str,
+    source_video_path: Path,
+    original_prompt: str,
+    user_prompt: str,
+    use_gemini: bool,
+    gemini_model: str,
+    veo_model: str,
+    veo_aspect_ratio: str,
+    veo_resolution: str,
+    postprocess_mode: str,
+) -> None:
+    """Background job to run video extension."""
+    try:
+        _update_job(new_job_id, status="running")
+        JOBS_DIR.mkdir(parents=True, exist_ok=True)
+        LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+        run_root = JOBS_DIR / new_job_id
+        run_root.mkdir(parents=True, exist_ok=True)
+
+        # Determine the extension prompt
+        if use_gemini:
+            from .prompt_rewriter import generate_extension_prompt
+            from .veo_guidelines import get_default_negative_prompt
+
+            try:
+                result = generate_extension_prompt(
+                    original_prompt=original_prompt,
+                    user_extension_hint=user_prompt if user_prompt else None,
+                    model=gemini_model,
+                )
+                extension_prompt = result.extension_prompt
+                negative_prompt = result.negative_prompt
+            except Exception as e:
+                # Fallback to user prompt or simple continuation
+                extension_prompt = user_prompt if user_prompt else f"Continue the animation: {original_prompt}"
+                negative_prompt = get_default_negative_prompt()
+        else:
+            from .veo_guidelines import get_default_negative_prompt
+            extension_prompt = user_prompt
+            negative_prompt = get_default_negative_prompt()
+
+        # Create Veo backend and extend
+        backend = VeoGenaiBackend(
+            model=veo_model,
+            aspect_ratio=veo_aspect_ratio,
+            resolution=veo_resolution,
+        )
+
+        extend_result = backend.extend_video(
+            source_video_path=source_video_path,
+            prompt=extension_prompt,
+            negative_prompt=negative_prompt,
+            output_dir=run_root / "extended",
+        )
+
+        # Copy extended video to library
+        out_path = _library_video_path(new_job_id)
+        import shutil
+        shutil.copy2(extend_result.video_path, out_path)
+
+        # Run postprocess if requested
+        post = {}
+        postprocess_status: Literal["idle", "running", "done", "error"] = "idle"
+        if postprocess_mode != "off":
+            _update_job(new_job_id, postprocess_status="running", postprocess_error=None)
+            post = _postprocess_video_assets(
+                job_id=new_job_id,
+                video_path=out_path,
+                mode=postprocess_mode if postprocess_mode != "off" else "voiceover",
+            )
+            produced_any = any(
+                post.get(k)
+                for k in (
+                    "captions_srt_path",
+                    "captions_json_path",
+                    "narration_audio_path",
+                    "narrated_video_path",
+                )
+            )
+            if post.get("error"):
+                postprocess_status = "error"
+            elif produced_any:
+                postprocess_status = "done"
+            else:
+                postprocess_status = "idle"
+
+        # Save library metadata
+        meta = {
+            "job_id": new_job_id,
+            "created_at": _dt.datetime.utcnow().isoformat() + "Z",
+            "prompt": extension_prompt,
+            "backend": "veo",
+            "accepted": True,
+            "report_summary": "extension",
+            "final_prompt": extension_prompt,
+            "extended_from": source_job_id,
+            "original_prompt": original_prompt,
+            "captions_summary": post.get("captions_summary"),
+            "has_captions_srt": bool(post.get("captions_srt_path")),
+            "has_captions_json": bool(post.get("captions_json_path")),
+            "has_narration_audio": bool(post.get("narration_audio_path")),
+            "has_narrated_video": bool(post.get("narrated_video_path")),
+            "postprocess_mode": postprocess_mode,
+            "postprocess_status": postprocess_status,
+            "postprocess_error": post.get("error"),
+        }
+        (LIBRARY_DIR / f"{new_job_id}.json").write_text(json.dumps(meta, indent=2))
+
+        _update_job(
+            new_job_id,
+            status="done",
+            accepted=True,
+            report_summary="extension",
+            out_path=str(out_path),
+            captions_summary=post.get("captions_summary"),
+            captions_srt_path=post.get("captions_srt_path"),
+            captions_json_path=post.get("captions_json_path"),
+            narration_audio_path=post.get("narration_audio_path"),
+            narrated_video_path=post.get("narrated_video_path"),
+            postprocess_status=postprocess_status,
+            postprocess_error=post.get("error"),
+        )
+    except Exception as e:
+        _update_job(new_job_id, status="error", error=str(e))
+    finally:
+        with _extend_jobs_lock:
+            _extend_jobs_in_flight.discard(source_job_id)
+
+
 @app.get("/api/videos/{job_id}.mp4")
 def get_video(job_id: str) -> FileResponse:
     _validate_job_id(job_id)
@@ -591,6 +855,7 @@ def library(request: Request) -> List[LibraryItem]:
                     captions_json_url=captions_json_url,
                     narration_audio_url=narration_audio_url,
                     narrated_video_url=narrated_video_url,
+                    extended_from=meta.get("extended_from"),
                 )
             )
     return items

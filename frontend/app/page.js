@@ -106,6 +106,8 @@ function FeedItem({
   postprocess,
   onPostprocess,
   onRemoveCaptions,
+  onExtend,
+  extendStatus,
   setRef
 }) {
   const videoRef = useRef(null);
@@ -172,6 +174,8 @@ function FeedItem({
 
   const busy = postprocess?.status === "running";
   const err = postprocess?.status === "error" ? postprocess?.error : "";
+  const extending = extendStatus?.status === "running";
+  const isExtension = Boolean(item?.extended_from);
 
   return (
     <div ref={setRef} className="feedItem" data-job-id={item.job_id}>
@@ -190,10 +194,13 @@ function FeedItem({
         <div className="videoOverlayBottom" />
 
         <div className="meta">
-          <div className="metaTitle">{item.prompt || item.job_id}</div>
+          <div className="metaTitle">
+            {isExtension ? "↳ " : ""}{item.prompt || item.job_id}
+          </div>
           <div className="metaSubtitle">
             {clampIso(item.created_at)}
             {item.report_summary ? ` • ${item.report_summary}` : ""}
+            {isExtension ? " • extended" : ""}
             {err ? ` • ${String(err).slice(0, 120)}` : ""}
           </div>
         </div>
@@ -218,6 +225,13 @@ function FeedItem({
             onClick={() => onPostprocess(item.job_id, "voiceover")}
           >
             {busy && postprocess?.mode === "voiceover" ? "…" : hasVoiceover ? "VO ✓" : "VO"}
+          </button>
+          <button
+            className="actionBtn actionBtnExtend"
+            disabled={extending}
+            onClick={() => onExtend(item.job_id)}
+          >
+            {extending ? "…" : "Extend"}
           </button>
           <button className="actionBtn" onClick={onToggleMute}>
             {muted ? "Sound" : "Mute"}
@@ -256,11 +270,23 @@ export default function Home() {
   const [library, setLibrary] = useState([]);
   const [activeJobId, setActiveJobId] = useState(null);
   const [postprocessById, setPostprocessById] = useState({});
+  const [extendStatusById, setExtendStatusById] = useState({});
+
+  // Extension modal state
+  const [extendModalOpen, setExtendModalOpen] = useState(false);
+  const [extendJobId, setExtendJobId] = useState(null);
+  const [extendPrompt, setExtendPrompt] = useState("");
+  const [extendUseGemini, setExtendUseGemini] = useState(true);
+  const [extendPostprocess, setExtendPostprocess] = useState("voiceover");
+  const [isExtending, setIsExtending] = useState(false);
+  const [extendError, setExtendError] = useState("");
+  const [extendNewJobId, setExtendNewJobId] = useState(null);
 
   const feedRef = useRef(null);
   const itemEls = useRef(new Map());
   const pollRef = useRef(null);
   const postprocessPollersRef = useRef({});
+  const extendPollersRef = useRef({});
 
   const videoUrl = useMemo(() => {
     if (!jobId) return "";
@@ -488,12 +514,89 @@ export default function Home() {
     }
   }
 
+  function openExtendModal(jobId) {
+    setExtendJobId(jobId);
+    setExtendPrompt("");
+    setExtendUseGemini(true);
+    setExtendPostprocess("voiceover");
+    setExtendError("");
+    setExtendNewJobId(null);
+    setExtendModalOpen(true);
+  }
+
+  async function submitExtend() {
+    if (!extendJobId) return;
+    if (!extendUseGemini && !extendPrompt.trim()) {
+      setExtendError("Please enter a prompt for the video extension.");
+      return;
+    }
+
+    setExtendError("");
+    setIsExtending(true);
+    setExtendStatusById((prev) => ({
+      ...prev,
+      [extendJobId]: { status: "running" }
+    }));
+
+    try {
+      const resp = await apiFetchJson(`/api/jobs/${extendJobId}/extend`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: extendPrompt.trim() || null,
+          use_gemini: extendUseGemini,
+          postprocess_mode: extendPostprocess
+        })
+      });
+
+      setExtendNewJobId(resp.new_job_id);
+
+      // Poll for completion
+      const pollExtend = async () => {
+        try {
+          const data = await apiFetchJson(resp.status_url);
+          const status = String(data?.job?.status || "").trim();
+          if (status === "done" || status === "error") {
+            if (extendPollersRef.current[extendJobId]) {
+              clearInterval(extendPollersRef.current[extendJobId]);
+              delete extendPollersRef.current[extendJobId];
+            }
+            setExtendStatusById((prev) => ({
+              ...prev,
+              [extendJobId]: { status: status === "error" ? "error" : "done" }
+            }));
+            setIsExtending(false);
+            if (status === "done") {
+              await refreshLibrary();
+            } else {
+              setExtendError(data?.job?.error || "Extension failed.");
+            }
+          }
+        } catch {
+          // Keep polling
+        }
+      };
+
+      extendPollersRef.current[extendJobId] = setInterval(pollExtend, 2000);
+      await pollExtend();
+    } catch (e) {
+      setExtendStatusById((prev) => ({
+        ...prev,
+        [extendJobId]: { status: "error" }
+      }));
+      setExtendError(String(e?.message || e));
+      setIsExtending(false);
+    }
+  }
+
   useEffect(() => {
     refreshLibrary();
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
       const pollers = postprocessPollersRef.current || {};
       for (const k of Object.keys(pollers)) clearInterval(pollers[k]);
+      const extendPollers = extendPollersRef.current || {};
+      for (const k of Object.keys(extendPollers)) clearInterval(extendPollers[k]);
     };
   }, []);
 
@@ -561,6 +664,8 @@ export default function Home() {
                 postprocess={postprocessById[item.job_id]}
                 onPostprocess={onPostprocess}
                 onRemoveCaptions={onRemoveCaptions}
+                onExtend={openExtendModal}
+                extendStatus={extendStatusById[item.job_id]}
               />
             ))}
           </div>
@@ -706,6 +811,98 @@ export default function Home() {
                     Done. Scroll the feed to find it. {job.report_summary ? `Scores: ${job.report_summary}` : ""}
                   </div>
                   <video className="videoPreview" controls src={videoUrl} />
+                </>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {extendModalOpen ? (
+        <div className="modalOverlay" onClick={() => !isExtending && setExtendModalOpen(false)}>
+          <div className="modal modalSmall" onClick={(e) => e.stopPropagation()}>
+            <div className="modalHeader">
+              <div>
+                <div className="modalTitle">Extend Video</div>
+                <div className="muted">Continue this video with Veo</div>
+              </div>
+              <button
+                className="btn btnGhost btnSmall"
+                onClick={() => setExtendModalOpen(false)}
+                disabled={isExtending}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="modalBody">
+              <label className="chip">
+                <input
+                  type="checkbox"
+                  checked={extendUseGemini}
+                  onChange={(e) => setExtendUseGemini(e.target.checked)}
+                  disabled={isExtending}
+                />
+                <span>Gemini-supervised (auto-generate continuation prompt)</span>
+              </label>
+
+              <label className="field">
+                <div className="label">
+                  {extendUseGemini ? "Extension hint (optional)" : "Extension prompt (required)"}
+                </div>
+                <input
+                  className="input"
+                  value={extendPrompt}
+                  onChange={(e) => setExtendPrompt(e.target.value)}
+                  placeholder={
+                    extendUseGemini
+                      ? 'e.g. "zoom out to show the full organ" (Gemini will expand this)'
+                      : 'e.g. "The camera slowly pulls back to reveal the surrounding tissue..."'
+                  }
+                  disabled={isExtending}
+                />
+                {extendUseGemini ? (
+                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    Leave blank for Gemini to decide what happens next based on the original animation.
+                  </div>
+                ) : null}
+              </label>
+
+              <label className="field">
+                <div className="label">Post-process</div>
+                <select
+                  className="select"
+                  value={extendPostprocess}
+                  onChange={(e) => setExtendPostprocess(e.target.value)}
+                  disabled={isExtending}
+                >
+                  <option value="off">Off</option>
+                  <option value="captions">Captions</option>
+                  <option value="voiceover">Voiceover + captions</option>
+                </select>
+              </label>
+
+              <div className="row">
+                <button
+                  className="btn btnPrimary"
+                  onClick={submitExtend}
+                  disabled={isExtending}
+                >
+                  {isExtending ? "Extending…" : "Extend Video"}
+                </button>
+                {extendNewJobId ? (
+                  <div className="muted">New job: {extendNewJobId.slice(0, 8)}…</div>
+                ) : null}
+              </div>
+
+              {extendError ? <div className="error">{extendError}</div> : null}
+
+              {extendStatusById[extendJobId]?.status === "done" ? (
+                <>
+                  <div className="divider" />
+                  <div className="muted">
+                    Done! The extended video has been added to your library. You can close this modal and scroll to find it.
+                  </div>
                 </>
               ) : null}
             </div>

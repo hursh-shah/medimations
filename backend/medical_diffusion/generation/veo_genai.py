@@ -2,13 +2,25 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from ..io.video import VideoEncodeError, extract_frames_ffmpeg
 from ..types import AnimationSpec, GenerationResult
 from .base import ensure_empty_dir
+
+
+@dataclass
+class ExtendVideoResult:
+    """Result of a video extension operation."""
+    video_path: Path
+    frames: List[Path]
+    frames_dir: Path
+    source_video_path: Path
+    prompt: str
+    model: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -113,5 +125,117 @@ class VeoGenaiBackend:
                 "video_path": str(video_path),
                 "model": self.model,
                 "input_image_path": str(spec.input_image_path) if spec.input_image_path is not None else None,
+            },
+        )
+
+    def extend_video(
+        self,
+        *,
+        source_video_path: Path,
+        prompt: str,
+        negative_prompt: Optional[str] = None,
+        output_dir: Path,
+        fps: int = 8,
+    ) -> ExtendVideoResult:
+        """
+        Extend an existing video using Veo's video-to-video continuation.
+        
+        This uses the source video as a reference and generates a continuation
+        based on the provided prompt.
+        
+        Args:
+            source_video_path: Path to the source video file to extend
+            prompt: The prompt describing what should happen in the continuation
+            negative_prompt: Optional negative prompt for things to avoid
+            output_dir: Directory to save the extended video and frames
+            fps: Frames per second for frame extraction
+            
+        Returns:
+            ExtendVideoResult with paths to the extended video and frames
+        """
+        ensure_empty_dir(output_dir)
+        frames_dir = output_dir / "frames"
+        frames_dir.mkdir(parents=True, exist_ok=True)
+
+        extended_video_path = output_dir / "extended.mp4"
+
+        try:
+            from google import genai
+            from google.genai import types
+        except Exception as e:
+            raise RuntimeError(
+                "google-genai is required for video extension. Install with: pip install google-genai"
+            ) from e
+
+        api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+        if not api_key:
+            raise RuntimeError("GOOGLE_API_KEY is not set (required for video extension)")
+        
+        client = genai.Client(api_key=api_key)
+
+        # Validate source video exists
+        source_video_path = Path(source_video_path)
+        if not source_video_path.exists():
+            raise RuntimeError(f"Source video not found: {source_video_path}")
+
+        # Read video bytes and create Video object
+        video_bytes = source_video_path.read_bytes()
+        video = types.Video(
+            video_bytes=video_bytes,
+            mime_type="video/mp4",
+        )
+
+        # Generate extended video using source video as reference
+        operation = client.models.generate_videos(
+            model=self.model,
+            prompt=prompt,
+            video=video,
+            config=types.GenerateVideosConfig(
+                negative_prompt=negative_prompt or None,
+                aspect_ratio=self.aspect_ratio,
+                resolution=self.resolution,
+            ),
+        )
+
+        # Poll until done
+        while not operation.done:
+            time.sleep(max(1, int(self.poll_seconds)))
+            operation = client.operations.get(operation)
+
+        if not getattr(operation, "response", None) or not getattr(operation.response, "generated_videos", None):
+            raise RuntimeError("Veo returned no videos for extension")
+
+        # Download and save the extended video
+        generated_video = operation.response.generated_videos[0]
+        client.files.download(file=generated_video.video)
+        generated_video.video.save(str(extended_video_path))
+
+        # Extract frames from the extended video
+        try:
+            extract_frames_ffmpeg(
+                video_path=extended_video_path,
+                frames_dir=frames_dir,
+                fps=fps,
+                width=None,
+                height=None,
+            )
+        except VideoEncodeError as e:
+            raise RuntimeError(f"Failed to extract frames from extended video: {e}") from e
+
+        frames = sorted(frames_dir.glob("frame_*.ppm"))
+        if not frames:
+            raise RuntimeError("No frames extracted from extended video")
+
+        return ExtendVideoResult(
+            video_path=extended_video_path,
+            frames=frames,
+            frames_dir=frames_dir,
+            source_video_path=source_video_path,
+            prompt=prompt,
+            model=self.model,
+            metadata={
+                "source_video_path": str(source_video_path),
+                "extended_video_path": str(extended_video_path),
+                "negative_prompt": negative_prompt,
             },
         )

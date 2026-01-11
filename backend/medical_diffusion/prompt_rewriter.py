@@ -132,3 +132,117 @@ Output the complete JSON response with all fields.
         notes=get_optional_str(data, "notes"),
         components=components,
     )
+
+
+@dataclass(frozen=True)
+class ExtensionPromptResult:
+    """Result of generating a video extension prompt."""
+    extension_prompt: str
+    negative_prompt: Optional[str]
+    notes: Optional[str] = None
+
+
+_EXTENSION_SYSTEM = """You are an expert prompt engineer for Veo 3.1 video extension. You are also a physician with extensive anatomical and clinical knowledge.
+
+Your task: Generate a continuation prompt that will seamlessly extend an existing medical animation video.
+
+== VIDEO EXTENSION PRINCIPLES ==
+
+When extending a video:
+1. CONTINUITY: The continuation must flow naturally from where the original ends
+2. CONSISTENCY: Maintain the same visual style, lighting, camera work, and anatomical accuracy
+3. PROGRESSION: The action should logically continue or progress the narrative
+4. MEDICAL ACCURACY: All anatomical structures and processes must remain scientifically correct
+
+== OUTPUT FORMAT ==
+
+Output STRICT JSON with these keys:
+{
+  "extension_prompt": "string - the prompt for the video continuation",
+  "negative_prompt": "string - elements to avoid",
+  "notes": "string - optional brief notes about the continuation"
+}
+
+The extension_prompt should:
+- Describe what happens NEXT in the video
+- Reference the ongoing action/process naturally
+- Maintain camera and style consistency
+- Include temporal consistency cues
+- Keep medical accuracy constraints
+
+No markdown. No extra keys.
+"""
+
+
+def generate_extension_prompt(
+    *,
+    original_prompt: str,
+    user_extension_hint: Optional[str] = None,
+    model: str = "gemini-3.0-flash",
+    gemini_config: Optional[GeminiConfig] = None,
+) -> ExtensionPromptResult:
+    """
+    Generate a Gemini-supervised continuation prompt for video extension.
+    
+    Uses the original video's prompt and an optional user hint to generate
+    a semantically coherent continuation prompt that maintains visual and
+    medical accuracy consistency.
+    
+    Args:
+        original_prompt: The prompt used to generate the original video
+        user_extension_hint: Optional user-provided hint about what should happen next
+        model: Gemini model to use
+        gemini_config: Optional pre-configured Gemini config
+        
+    Returns:
+        ExtensionPromptResult with the extension prompt and metadata
+    """
+    original_prompt = (original_prompt or "").strip()
+    if not original_prompt:
+        raise ValueError("original_prompt is empty")
+
+    cfg = gemini_config or load_gemini_config(model=model)
+
+    hint_section = ""
+    if user_extension_hint and user_extension_hint.strip():
+        hint_section = f"""
+User's hint for what should happen next:
+{user_extension_hint.strip()}
+
+Incorporate this hint into the continuation while maintaining consistency with the original.
+"""
+    else:
+        hint_section = """
+No specific hint provided. Generate a natural, logical continuation of the medical animation.
+Consider what would naturally happen next in this anatomical/physiological process.
+"""
+
+    user = f"""Original video prompt:
+{original_prompt}
+
+{hint_section}
+
+Generate a continuation prompt that:
+1. Flows seamlessly from where the original video would end
+2. Maintains the same visual style, camera work, and lighting
+3. Continues or progresses the medical/anatomical narrative
+4. Preserves anatomical accuracy and temporal consistency
+5. Includes constraints: no on-screen text, no watermarks
+
+Output the complete JSON response.
+"""
+
+    data = generate_json(system=_EXTENSION_SYSTEM, user=user, config=cfg)
+    extension_prompt = get_optional_str(data, "extension_prompt")
+    if not extension_prompt:
+        raise GeminiError("Gemini did not return an extension_prompt")
+
+    negative_prompt = get_optional_str(data, "negative_prompt")
+    if not negative_prompt:
+        negative_prompt = get_default_negative_prompt()
+
+    return ExtensionPromptResult(
+        extension_prompt=extension_prompt,
+        negative_prompt=negative_prompt,
+        notes=get_optional_str(data, "notes"),
+    )

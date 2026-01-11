@@ -294,3 +294,287 @@ def _combined_score(report: ValidationReport, *, medical_threshold: float, physi
     m = report.medical.score / max(1e-6, medical_threshold)
     p = report.physics.score / max(1e-6, physics_threshold)
     return m + p
+
+
+@dataclass(frozen=True)
+class SmartAgentConfig(AgentConfig):
+    """Configuration for SmartValidatorAgent with edit capabilities."""
+    # Enable smart editing (INSERT/REMOVE) instead of always regenerating
+    enable_smart_edits: bool = True
+    # Minimum confidence required to attempt a targeted edit vs regeneration
+    edit_confidence_threshold: float = 0.6
+    # Maximum number of targeted edits to attempt before falling back to regeneration
+    max_edit_attempts: int = 2
+
+
+class SmartValidatorAgent:
+    """
+    Enhanced validator agent that can perform targeted edits.
+    
+    Instead of always regenerating the entire video when validation fails,
+    this agent can analyze the specific issues and attempt targeted edits
+    (INSERT missing structures or REMOVE incorrect ones) using Veo's
+    mask-based editing capabilities.
+    
+    Falls back to full regeneration when:
+    - Smart edits are disabled
+    - Too many edits would be required
+    - Confidence in edit strategy is too low
+    - Edit attempts fail
+    """
+
+    def __init__(
+        self,
+        *,
+        generator,  # VeoGenaiBackend
+        medical_validators: Sequence[Validator],
+        physics_validators: Sequence[Validator],
+        config: SmartAgentConfig,
+        prompt_adjuster: Optional[PromptAdjuster] = None,
+        gemini_model: str = "gemini-3.0-flash",
+        run_root: Optional[Path] = None,
+    ) -> None:
+        self._generator = generator
+        self._medical_validators = list(medical_validators)
+        self._physics_validators = list(physics_validators)
+        self._config = config
+        self._prompt_adjuster = prompt_adjuster or GeminiPromptAdjuster(model=gemini_model)
+        self._gemini_model = gemini_model
+        self._run_root = run_root
+
+    def run(self, *, spec: AnimationSpec) -> AgentResult:
+        """
+        Run the smart validation loop.
+        
+        1. Generate initial video
+        2. Validate
+        3. If failing, analyze whether to edit or regenerate
+        4. Attempt edits if appropriate, otherwise regenerate with improved prompt
+        5. Repeat until passing or max rounds reached
+        """
+        run_root = self._run_root or Path("runs") / _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_root.mkdir(parents=True, exist_ok=True)
+
+        history: List[AgentRound] = []
+        current_spec = spec
+        edit_attempts_this_round = 0
+        last_generation: Optional[GenerationResult] = None
+        last_video_path: Optional[Path] = None
+
+        for round_index in range(self._config.max_rounds):
+            best_round: Optional[AgentRound] = None
+            best_score = float("-inf")
+
+            for candidate_index in range(self._config.candidates_per_round):
+                seed = (
+                    current_spec.seed
+                    if current_spec.seed is not None
+                    else random.randint(0, 2**31 - 1)
+                )
+                candidate_spec = replace(current_spec, seed=seed)
+                out_dir = run_root / f"round_{round_index:02d}" / f"cand_{candidate_index:02d}"
+                
+                generation: GenerationResult = self._generator.generate(spec=candidate_spec, output_dir=out_dir)
+                last_generation = generation
+                
+                # Track video path for potential edits
+                video_path = generation.metadata.get("video_path")
+                if video_path:
+                    last_video_path = Path(video_path)
+
+                medical_score = _aggregate_scores(self._medical_validators, generation)
+                physics_score = _aggregate_scores(self._physics_validators, generation)
+                report = build_report(medical=medical_score, physics=physics_score)
+
+                agent_round = AgentRound(
+                    round_index=round_index,
+                    prompt=candidate_spec.prompt,
+                    candidate_index=candidate_index,
+                    generation=generation,
+                    report=report,
+                )
+                history.append(agent_round)
+
+                combined = _combined_score(
+                    report,
+                    medical_threshold=self._config.medical_threshold,
+                    physics_threshold=self._config.physics_threshold,
+                )
+                if combined > best_score:
+                    best_score = combined
+                    best_round = agent_round
+
+                if _accepted(report, self._config):
+                    return AgentResult(accepted=True, final=agent_round, history=history)
+
+            if best_round is None:
+                raise RuntimeError("Agent produced no candidates")
+
+            # Decide correction strategy
+            use_smart_edit = False
+            correction_plan = None
+            
+            if (
+                self._config.enable_smart_edits
+                and last_video_path is not None
+                and last_video_path.exists()
+                and edit_attempts_this_round < self._config.max_edit_attempts
+            ):
+                # Analyze for potential targeted edits
+                try:
+                    from .edit_analyzer import CorrectionAction, analyze_for_corrections
+                    
+                    correction_plan = analyze_for_corrections(
+                        original_prompt=current_spec.prompt,
+                        report=best_round.report,
+                        model=self._gemini_model,
+                    )
+                    
+                    if (
+                        correction_plan.primary_action in (CorrectionAction.INSERT, CorrectionAction.REMOVE)
+                        and correction_plan.confidence >= self._config.edit_confidence_threshold
+                        and len(correction_plan.edits) <= 2
+                    ):
+                        use_smart_edit = True
+                        
+                except Exception as e:
+                    # Fall back to regeneration on analysis failure
+                    metadata = dict(current_spec.metadata or {})
+                    metadata["edit_analysis_error"] = str(e)
+                    current_spec = replace(current_spec, metadata=metadata)
+
+            if use_smart_edit and correction_plan is not None and correction_plan.edits:
+                # Attempt targeted edit
+                try:
+                    edited_generation = self._apply_edit(
+                        video_path=last_video_path,
+                        edit=correction_plan.edits[0],
+                        out_dir=run_root / f"round_{round_index:02d}" / "edit_{:02d}".format(edit_attempts_this_round),
+                    )
+                    
+                    if edited_generation is not None:
+                        # Validate the edited video
+                        medical_score = _aggregate_scores(self._medical_validators, edited_generation)
+                        physics_score = _aggregate_scores(self._physics_validators, edited_generation)
+                        edit_report = build_report(medical=medical_score, physics=physics_score)
+                        
+                        edit_round = AgentRound(
+                            round_index=round_index,
+                            prompt=f"[EDIT:{correction_plan.edits[0].action.value}] {correction_plan.edits[0].target_object}",
+                            candidate_index=candidate_index + 1,
+                            generation=edited_generation,
+                            report=edit_report,
+                        )
+                        history.append(edit_round)
+                        
+                        if _accepted(edit_report, self._config):
+                            return AgentResult(accepted=True, final=edit_round, history=history)
+                        
+                        # Update for next round
+                        last_generation = edited_generation
+                        video_path = edited_generation.metadata.get("video_path")
+                        if video_path:
+                            last_video_path = Path(video_path)
+                        
+                        edit_attempts_this_round += 1
+                        continue  # Try another edit or regenerate
+                        
+                except Exception as e:
+                    metadata = dict(current_spec.metadata or {})
+                    metadata["edit_apply_error"] = str(e)
+                    current_spec = replace(current_spec, metadata=metadata)
+
+            # Fall back to regeneration with improved prompt
+            edit_attempts_this_round = 0  # Reset for new round
+            
+            # Use regeneration prompt from correction plan if available
+            if correction_plan is not None and correction_plan.regeneration_prompt:
+                metadata = dict(current_spec.metadata or {})
+                metadata["correction_reasoning"] = correction_plan.reasoning
+                current_spec = replace(
+                    current_spec,
+                    prompt=correction_plan.regeneration_prompt,
+                    metadata=metadata,
+                )
+            else:
+                current_spec = self._prompt_adjuster.adjust(
+                    spec=replace(current_spec, prompt=best_round.prompt),
+                    report=best_round.report,
+                    round_index=round_index,
+                )
+
+        assert history
+        return AgentResult(accepted=False, final=history[-1], history=history)
+
+    def _apply_edit(
+        self,
+        *,
+        video_path: Path,
+        edit,  # EditInstruction
+        out_dir: Path,
+    ) -> Optional[GenerationResult]:
+        """
+        Apply a targeted edit (INSERT or REMOVE) to a video.
+        
+        Returns a GenerationResult if successful, None if edit cannot be applied.
+        """
+        from .edit_analyzer import CorrectionAction
+        from .generation.veo_genai import VideoEditMode
+        from .mask_generator import generate_mask_from_description, get_video_dimensions
+        
+        out_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Get video dimensions
+        try:
+            width, height = get_video_dimensions(video_path)
+        except Exception:
+            width, height = 720, 1280
+        
+        # Generate mask
+        mask_path = out_dir / "edit_mask.png"
+        region_desc = edit.region_description or "center"
+        
+        generate_mask_from_description(
+            description=region_desc,
+            output_path=mask_path,
+            width=width,
+            height=height,
+            shape="ellipse",  # Better for organic structures
+            feather=15,
+        )
+        
+        # Determine edit mode
+        if edit.action == CorrectionAction.INSERT:
+            mode = VideoEditMode.INSERT
+            prompt = edit.insertion_prompt or edit.target_object or ""
+        else:
+            mode = VideoEditMode.REMOVE
+            prompt = None
+        
+        # Apply the edit
+        result = self._generator.edit_video(
+            source_video_path=video_path,
+            mask_path=mask_path,
+            mode=mode,
+            prompt=prompt,
+            output_dir=out_dir,
+        )
+        
+        # Convert VideoEditResult to GenerationResult for validation
+        spec = AnimationSpec(
+            prompt=f"[{mode.value}] {edit.target_object or 'edit'}",
+            negative_prompt=None,
+        )
+        
+        return GenerationResult(
+            spec=spec,
+            frames=result.frames,
+            frames_dir=result.frames_dir,
+            backend="veo_edit",
+            metadata={
+                "video_path": str(result.video_path),
+                "edit_mode": result.edit_mode.value,
+                "source_video_path": str(result.source_video_path),
+                "mask_path": str(result.mask_path),
+            },
+        )

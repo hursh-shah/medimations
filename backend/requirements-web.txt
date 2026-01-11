@@ -7,7 +7,14 @@ uvicorn[standard]
 google-genai
 
 # BiomedCLIP verifier
-torch
+# CPU-only PyTorch wheels (avoid huge CUDA layers on Railway)
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# Local dev on macOS uses the standard wheels; Linux deploys use +cpu wheels.
+torch==2.2.2; platform_system=="Darwin"
+torchvision==0.17.2; platform_system=="Darwin"
+torch==2.2.2+cpu; platform_system!="Darwin"
+torchvision==0.17.2+cpu; platform_system!="Darwin"
 pillow
 open_clip_torch==2.23.0
 transformers==4.35.2

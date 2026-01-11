@@ -28,6 +28,15 @@ Open `http://localhost:3000`.
 
 ### Deployment notes
 
-- Deploy `frontend/` to Vercel and set `NEXT_PUBLIC_BACKEND_URL` to your backend URL.
-- Deploy `backend/` somewhere that can run Python + ffmpeg (Render/Railway/VM). Vercel serverless is not a good fit for the BiomedCLIP torch dependency.
+- Deploy `backend/` somewhere that can run Python + `ffmpeg` (Railway/VM). Vercel serverless is not a good fit for the BiomedCLIP `torch` dependency.
 
+**Railway (backend)**
+- Service root directory: `backend/` (so it picks up `backend/Dockerfile`)
+- Env vars (Railway): `GOOGLE_API_KEY` (required)
+- Domain: use a **public** Railway domain (not `.railway.internal`) and route to the service port (`PORT`, usually `8080`)
+- Health check: `https://<your-railway-domain>/api/health`
+
+**Vercel (frontend)**
+- Project root directory: `frontend/`
+- Framework preset: Next.js (leave “Output Directory” empty; don’t set it to `public`)
+- Env vars (Vercel): `NEXT_PUBLIC_BACKEND_URL=https://<your-railway-domain>`

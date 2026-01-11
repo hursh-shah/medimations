@@ -7,7 +7,7 @@ This is a runnable backend skeleton for:
 ### Quick start
 
 Requirements:
-- Python 3.9+
+- Python 3.10+ (3.11 recommended)
 - `ffmpeg` on PATH (required for extracting frames + encoding `.mp4`)
 
 API keys (only needed for real APIs):
@@ -44,7 +44,7 @@ By default `run` uses Gemini-based prompt rewriting (same `GOOGLE_API_KEY`). You
 
 BiomedCLIP can score sampled frames against text labels (guardrail-style). Install:
 ```bash
-pip install open_clip_torch==2.23.0 transformers==4.35.2 torch pillow
+pip install open_clip_torch==2.23.0 transformers==4.35.2 torch torchvision pillow
 ```
 
 Run with the validator enabled:
@@ -86,6 +86,7 @@ Railway is easiest with the included Dockerfile:
 3) Add env vars:
    - `GOOGLE_API_KEY` (required)
    - optional: `TWELVELABS_API_KEY`, `DEEPGRAM_API_KEY`
+   - Note: `requirements-web.txt` is pinned to CPU-only PyTorch wheels on Linux to avoid multi-GB CUDA installs/timeouts.
 4) (Recommended) Add a Railway Volume mounted at `/app/runs` so `runs/library` persists across deploys.
 5) Deploy, then check `https://<your-railway-domain>/api/health`.
 

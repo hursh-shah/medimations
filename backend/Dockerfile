@@ -9,6 +9,7 @@ WORKDIR /app
 # System deps: ffmpeg is required for extracting frames from Veo videos.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    libgomp1 \
   && rm -rf /var/lib/apt/lists/*
 
 COPY requirements-web.txt /app/requirements-web.txt
@@ -21,4 +22,3 @@ ENV MEDICAL_DIFFUSION_RUNS_DIR=/app/runs \
     HF_HOME=/app/runs/hf_cache
 
 CMD ["sh", "-c", "uvicorn medical_diffusion.server:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
-

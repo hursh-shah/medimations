@@ -513,39 +513,11 @@ html, body {
   margin: 0 auto;
 }
 
-/* Unique: Step indicator line on left */
 .formSection {
-  position: relative;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
   margin-bottom: 16px;
-  margin-left: 20px;
-}
-
-.formSection::before {
-  content: '';
-  position: absolute;
-  left: -20px;
-  top: 28px;
-  bottom: 28px;
-  width: 2px;
-  background: var(--border);
-}
-
-.formSection:last-of-type::before {
-  display: none;
-}
-
-.formSection::after {
-  content: '';
-  position: absolute;
-  left: -24px;
-  top: 26px;
-  width: 10px;
-  height: 10px;
-  background: var(--accent);
-  border-radius: 50%;
 }
 
 .formSectionHeader {
@@ -596,8 +568,6 @@ html, body {
 
 @media (max-width: 640px) {
   .formGrid { grid-template-columns: 1fr; }
-  .formSection { margin-left: 0; }
-  .formSection::before, .formSection::after { display: none; }
 }
 
 .formField {

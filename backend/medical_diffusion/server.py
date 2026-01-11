@@ -571,6 +571,20 @@ def extend_video(job_id: str, req: ExtendRequest) -> ExtendResponse:
     )
 
 
+def _load_original_narration(source_job_id: str) -> Optional[str]:
+    """Load the narration from the source job's captions JSON."""
+    captions_json_path = _library_captions_json_path(source_job_id)
+    if not captions_json_path.exists():
+        return None
+    try:
+        data = json.loads(captions_json_path.read_text())
+        if isinstance(data, dict):
+            return str(data.get("narration") or "").strip() or None
+    except Exception:
+        pass
+    return None
+
+
 def _run_extend_job(
     *,
     new_job_id: str,
@@ -593,6 +607,9 @@ def _run_extend_job(
         run_root = JOBS_DIR / new_job_id
         run_root.mkdir(parents=True, exist_ok=True)
 
+        # Load original narration for concatenation
+        original_narration = _load_original_narration(source_job_id)
+
         # Determine the extension prompt
         if use_gemini:
             from .prompt_rewriter import generate_extension_prompt
@@ -606,7 +623,7 @@ def _run_extend_job(
                 )
                 extension_prompt = result.extension_prompt
                 negative_prompt = result.negative_prompt
-            except Exception as e:
+            except Exception:
                 # Fallback to user prompt or simple continuation
                 extension_prompt = user_prompt if user_prompt else f"Continue the animation: {original_prompt}"
                 negative_prompt = get_default_negative_prompt()
@@ -634,15 +651,17 @@ def _run_extend_job(
         import shutil
         shutil.copy2(extend_result.video_path, out_path)
 
-        # Run postprocess if requested
+        # Run postprocess if requested - with continuation support
         post = {}
         postprocess_status: Literal["idle", "running", "done", "error"] = "idle"
         if postprocess_mode != "off":
             _update_job(new_job_id, postprocess_status="running", postprocess_error=None)
-            post = _postprocess_video_assets(
+            post = _postprocess_extension_video_assets(
                 job_id=new_job_id,
                 video_path=out_path,
                 mode=postprocess_mode if postprocess_mode != "off" else "voiceover",
+                original_narration=original_narration,
+                source_job_id=source_job_id,
             )
             produced_any = any(
                 post.get(k)
@@ -1206,6 +1225,131 @@ def _postprocess_video_assets(
                 out["narrated_video_path"] = str(narrated_path)
             except VideoEncodeError as e:
                 out["error"] = f"ffmpeg mux failed: {e}"
+        return out
+    except Exception as e:
+        out["error"] = str(e)
+        return out
+
+
+def _postprocess_extension_video_assets(
+    *,
+    job_id: str,
+    video_path: Path,
+    mode: Literal["captions", "voiceover"] = "voiceover",
+    original_narration: Optional[str] = None,
+    source_job_id: Optional[str] = None,
+    force: bool = False,
+) -> Dict[str, Optional[str]]:
+    """
+    Post-process an extended video with narration concatenation.
+    
+    If original_narration is provided, this will:
+    1. Generate captions/narration for just the extension segment
+    2. Concatenate original + extension narration
+    3. Generate TTS for the combined narration
+    4. Mux audio with the extended video
+    """
+    from .postprocess.twelvelabs import (
+        concatenate_narrations,
+        generate_continuation_captions_with_twelvelabs,
+    )
+    
+    out: Dict[str, Optional[str]] = {
+        "captions_summary": None,
+        "captions_srt_path": None,
+        "captions_json_path": None,
+        "narration_audio_path": None,
+        "narrated_video_path": None,
+        "error": None,
+    }
+
+    mode = (mode or "voiceover").strip().lower()
+    if mode not in {"captions", "voiceover"}:
+        out["error"] = "mode must be one of: captions, voiceover"
+        return out
+
+    captions_json_path = _library_captions_json_path(job_id)
+    captions_srt_path = _library_captions_srt_path(job_id)
+    audio_path = _library_narration_audio_path(job_id)
+    narrated_path = _library_narrated_video_path(job_id)
+
+    # If no original narration, fall back to standard processing
+    if not original_narration:
+        return _postprocess_video_assets(
+            job_id=job_id,
+            video_path=video_path,
+            mode=mode,
+            force=force,
+        )
+
+    cfg = _load_twelvelabs_config()
+    if cfg is None:
+        out["error"] = "TWELVELABS_API_KEY is not set"
+        return out
+
+    try:
+        # Generate continuation captions for just the extension video
+        extension_captions = generate_continuation_captions_with_twelvelabs(
+            video_path=video_path,
+            config=cfg,
+            preceding_narration=original_narration,
+        )
+
+        # Concatenate original + extension narrations
+        combined_narration = concatenate_narrations(
+            original_narration=original_narration,
+            extension_narration=extension_captions.narration,
+            separator=" ",
+        )
+
+        # Save captions with concatenated narration
+        captions_payload = {
+            "summary": extension_captions.summary,
+            "captions": [{"start_s": s.start_s, "end_s": s.end_s, "text": s.text} for s in extension_captions.segments],
+            "narration": combined_narration,  # Combined narration for TTS
+            "extension_narration": extension_captions.narration,  # Just the extension part
+            "original_narration": original_narration,  # Original part
+            "medical_uncertainties": extension_captions.medical_uncertainties,
+            "extended_from": source_job_id,
+        }
+
+        captions_json_path.write_text(json.dumps(captions_payload, ensure_ascii=False, indent=2))
+        captions_srt_path.write_text(extension_captions.to_srt())
+
+        out["captions_summary"] = extension_captions.summary
+        out["captions_json_path"] = str(captions_json_path)
+        out["captions_srt_path"] = str(captions_srt_path)
+    except Exception as e:
+        out["error"] = f"TwelveLabs captioning failed: {e}"
+        return out
+
+    try:
+        if mode == "captions":
+            return out
+
+        tts_cfg = _load_deepgram_tts_config()
+        if tts_cfg is None:
+            out["error"] = "DEEPGRAM_API_KEY is not set"
+            return out
+
+        if not combined_narration:
+            out["error"] = "No narration script available for voiceover"
+            return out
+
+        # Generate TTS for combined narration
+        try:
+            synthesize_narration_with_deepgram(text=combined_narration, output_path=audio_path, config=tts_cfg)
+            out["narration_audio_path"] = str(audio_path)
+        except Exception as e:
+            out["error"] = f"Deepgram TTS failed: {e}"
+            return out
+
+        # Mux audio with video
+        try:
+            mux_audio_ffmpeg(video_path=video_path, audio_path=audio_path, output_path=narrated_path)
+            out["narrated_video_path"] = str(narrated_path)
+        except VideoEncodeError as e:
+            out["error"] = f"ffmpeg mux failed: {e}"
         return out
     except Exception as e:
         out["error"] = str(e)

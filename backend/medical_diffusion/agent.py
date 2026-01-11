@@ -359,7 +359,6 @@ class SmartValidatorAgent:
 
         history: List[AgentRound] = []
         current_spec = spec
-        edit_attempts_this_round = 0
         last_generation: Optional[GenerationResult] = None
         last_video_path: Optional[Path] = None
 
@@ -367,6 +366,7 @@ class SmartValidatorAgent:
             best_round: Optional[AgentRound] = None
             best_score = float("-inf")
             last_candidate_index = 0  # Track for edit rounds; default handles candidates_per_round=0
+            edit_attempts_this_round = 0  # Reset at start of each round
 
             for candidate_index in range(self._config.candidates_per_round):
                 last_candidate_index = candidate_index
@@ -447,8 +447,12 @@ class SmartValidatorAgent:
                     metadata["edit_analysis_error"] = str(e)
                     current_spec = replace(current_spec, metadata=metadata)
 
-            if use_smart_edit and correction_plan is not None and correction_plan.edits:
-                # Attempt targeted edit
+            # Attempt targeted edits in a loop within this round
+            while use_smart_edit and correction_plan is not None and correction_plan.edits:
+                if edit_attempts_this_round >= self._config.max_edit_attempts:
+                    # Hit max edit attempts, fall through to regeneration
+                    break
+                
                 try:
                     edited_generation = self._apply_edit(
                         video_path=last_video_path,
@@ -456,40 +460,67 @@ class SmartValidatorAgent:
                         out_dir=run_root / f"round_{round_index:02d}" / "edit_{:02d}".format(edit_attempts_this_round),
                     )
                     
-                    if edited_generation is not None:
-                        # Validate the edited video
-                        medical_score = _aggregate_scores(self._medical_validators, edited_generation)
-                        physics_score = _aggregate_scores(self._physics_validators, edited_generation)
-                        edit_report = build_report(medical=medical_score, physics=physics_score)
-                        
-                        edit_round = AgentRound(
-                            round_index=round_index,
-                            prompt=f"[EDIT:{correction_plan.edits[0].action.value}] {correction_plan.edits[0].target_object}",
-                            candidate_index=last_candidate_index + 1 + edit_attempts_this_round,
-                            generation=edited_generation,
-                            report=edit_report,
-                        )
-                        history.append(edit_round)
-                        
-                        if _accepted(edit_report, self._config):
-                            return AgentResult(accepted=True, final=edit_round, history=history)
-                        
-                        # Update for next round
-                        last_generation = edited_generation
-                        video_path = edited_generation.metadata.get("video_path")
-                        if video_path:
-                            last_video_path = Path(video_path)
-                        
-                        edit_attempts_this_round += 1
-                        continue  # Try another edit or regenerate
+                    if edited_generation is None:
+                        # Edit failed to produce output, fall through to regeneration
+                        break
+                    
+                    # Validate the edited video
+                    medical_score = _aggregate_scores(self._medical_validators, edited_generation)
+                    physics_score = _aggregate_scores(self._physics_validators, edited_generation)
+                    edit_report = build_report(medical=medical_score, physics=physics_score)
+                    
+                    edit_round = AgentRound(
+                        round_index=round_index,
+                        prompt=f"[EDIT:{correction_plan.edits[0].action.value}] {correction_plan.edits[0].target_object}",
+                        candidate_index=last_candidate_index + 1 + edit_attempts_this_round,
+                        generation=edited_generation,
+                        report=edit_report,
+                    )
+                    history.append(edit_round)
+                    edit_attempts_this_round += 1
+                    
+                    if _accepted(edit_report, self._config):
+                        return AgentResult(accepted=True, final=edit_round, history=history)
+                    
+                    # Update video path for potential next edit attempt
+                    last_generation = edited_generation
+                    video_path = edited_generation.metadata.get("video_path")
+                    if video_path:
+                        last_video_path = Path(video_path)
+                    
+                    # Re-analyze for next edit if we have attempts left
+                    if edit_attempts_this_round < self._config.max_edit_attempts:
+                        try:
+                            from .edit_analyzer import CorrectionAction, analyze_for_corrections
+                            
+                            correction_plan = analyze_for_corrections(
+                                original_prompt=current_spec.prompt,
+                                report=edit_report,
+                                model=self._gemini_model,
+                            )
+                            
+                            if not (
+                                correction_plan.primary_action in (CorrectionAction.INSERT, CorrectionAction.REMOVE)
+                                and correction_plan.confidence >= self._config.edit_confidence_threshold
+                                and len(correction_plan.edits) <= 2
+                            ):
+                                # Analysis suggests regeneration instead of more edits
+                                break
+                        except Exception:
+                            # Re-analysis failed, fall through to regeneration
+                            break
+                    else:
+                        # No more edit attempts, fall through to regeneration
+                        break
                         
                 except Exception as e:
                     metadata = dict(current_spec.metadata or {})
                     metadata["edit_apply_error"] = str(e)
                     current_spec = replace(current_spec, metadata=metadata)
+                    # Edit failed, fall through to regeneration
+                    break
 
             # Fall back to regeneration with improved prompt
-            edit_attempts_this_round = 0  # Reset for new round
             
             # Use regeneration prompt from correction plan if available
             if correction_plan is not None and correction_plan.regeneration_prompt:

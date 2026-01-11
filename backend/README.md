@@ -49,9 +49,9 @@ uvicorn medical_diffusion.server:app --reload --port 8000
 ```
 Then call `POST /api/generate` with `"backend": "demo"` (or use the frontend “Test (no Veo)” button).
 
-### BiomedCLIP medical verifier (optional)
+### BiomedCLIP image verifier (optional)
 
-BiomedCLIP can score sampled frames against text labels (guardrail-style). Install:
+BiomedCLIP can score a generated (or uploaded) biomedical image against text labels (guardrail-style). Install:
 ```bash
 pip install open_clip_torch==2.23.0 transformers==4.35.2 torch torchvision pillow
 ```
@@ -60,15 +60,7 @@ Notes:
 - If you see errors about “NumPy 2.x” / `_ARRAY_API not found`, pin `numpy<2` (the Railway Docker build already does this).
 - BiomedCLIP is large; on Railway you likely need a higher-memory instance. If the process gets `Killed`, increase memory.
 
-Run with the validator enabled:
-```bash
-cd backend
-python3 -m medical_diffusion run \
-  --prompt "red blood cells moving through a capillary" \
-  --biomedclip \
-  --biomedclip-target "capillary" \
-  --no-video
-```
+This repo uses BiomedCLIP during image generation (`POST /api/images/generate`) and does not run BiomedCLIP on video frames by default (RAM).
 
 ### Run as an API server (for the web frontend)
 
@@ -86,7 +78,7 @@ uvicorn medical_diffusion.server:app --reload --port 8000
 
 API endpoints:
 - `POST /api/images/generate` → returns `{image_data_url, ...}` (optional helper for AI image generation)
-- `POST /api/generate` → returns `{job_id, status_url}` (supports optional `input_image` for image+text → video)
+- `POST /api/generate` → returns `{job_id, status_url}` (requires `input_image` for image+text → video)
 - `GET /api/jobs/{job_id}` → status + results
 - `GET /api/videos/{job_id}.mp4` → final video
 - `GET /api/library` → saved videos
@@ -111,7 +103,7 @@ Railway is easiest with the included Dockerfile:
   - `backend/medical_diffusion/generation/veo_genai.py` (Veo via google-genai)
   - Add a `diffusers` backend when you’re ready
 - Validators:
-  - `backend/medical_diffusion/validation/biomedclip.py` (BiomedCLIP frame verifier)
+  - `backend/medical_diffusion/validation/biomedclip.py` (BiomedCLIP image/text scorer)
   - `backend/medical_diffusion/validation/medical.py` (sanity/flicker check)
   - `backend/medical_diffusion/validation/physics.py` (toy gravity tracker + PyBullet stub)
 - Agent loop:

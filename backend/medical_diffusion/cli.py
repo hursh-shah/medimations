@@ -24,16 +24,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     run_p.add_argument("--out", default="runs/output.mp4", help="Output video path")
     run_p.add_argument("--no-video", action="store_true", help="Skip ffmpeg encode; leave frames on disk")
     run_p.add_argument("--negative-prompt", default=None, help="Optional negative prompt (backends that support it)")
+    run_p.add_argument("--input-image", default=None, help="Optional reference image path for image+text → video")
     run_p.add_argument("--veo-model", default="veo-3.1-generate-preview", help="Veo model id")
     run_p.add_argument("--veo-aspect-ratio", default="9:16", help="Veo aspect ratio, e.g. 9:16")
     run_p.add_argument("--veo-resolution", default="720p", help="Veo resolution, e.g. 720p")
     run_p.add_argument("--veo-poll-seconds", type=int, default=20, help="Polling interval for Veo operations")
     run_p.add_argument("--prompt-rewrite", default="gemini", choices=["none", "rule", "gemini"], help="Prompt rewrite mode")
     run_p.add_argument("--gemini-model", default="gemini-2.0-flash", help="Gemini model for prompt rewriting/reprompting")
-    run_p.add_argument("--biomedclip", action="store_true", help="Enable BiomedCLIP frame verifier (requires torch + open_clip_torch)")
-    run_p.add_argument("--biomedclip-target", default=None, help="Expected target label (e.g. 'liver'); inferred from prompt if omitted")
-    run_p.add_argument("--biomedclip-labels", default=None, help="Comma-separated labels (or path to a newline-delimited .txt)")
-    run_p.add_argument("--biomedclip-frames", type=int, default=12, help="Frames sampled for BiomedCLIP scoring")
+    run_p.add_argument("--biomedclip", action="store_true", help="(Deprecated) BiomedCLIP is no longer run on video frames by default")
+    run_p.add_argument("--biomedclip-target", default=None, help="(Deprecated) Use image generation validation instead")
+    run_p.add_argument("--biomedclip-labels", default=None, help="(Deprecated) Use image generation validation instead")
+    run_p.add_argument("--biomedclip-frames", type=int, default=12, help="(Deprecated) Use image generation validation instead")
     run_p.add_argument("--max-rounds", type=int, default=2)
     run_p.add_argument("--candidates", type=int, default=1)
     run_p.add_argument("--medical-threshold", type=float, default=0.85)
@@ -66,6 +67,8 @@ def _run(args: argparse.Namespace) -> int:
         spec = replace(spec, width=args.width, height=args.height)
     if args.negative_prompt is not None:
         spec = replace(spec, negative_prompt=args.negative_prompt)
+    if args.input_image:
+        spec = replace(spec, input_image_path=Path(args.input_image))
 
     metadata = dict(spec.metadata or {})
     if args.fps is not None:
@@ -98,14 +101,8 @@ def _run(args: argparse.Namespace) -> int:
     )
 
     medical_validators = [FrameSanityMedicalValidator()]
-    if args.biomedclip:
-        medical_validators.append(
-            BiomedCLIPMedicalValidator(
-                target_label=args.biomedclip_target,
-                labels=_parse_label_list(args.biomedclip_labels) if args.biomedclip_labels else None,
-                n_frames=int(args.biomedclip_frames or 12),
-            )
-        )
+    if args.biomedclip or args.biomedclip_target or args.biomedclip_labels:
+        print("Warning: BiomedCLIP validation is no longer run on video frames (use /api/images/generate instead).")
 
     physics_validators = [RedDotGravityValidator(), PyBulletPhysicsValidator()]
 

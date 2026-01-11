@@ -36,6 +36,8 @@ export default function Home() {
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageModel, setImageModel] = useState("imagen-3.0-generate-001");
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [isCheckingImage, setIsCheckingImage] = useState(false);
+  const [imageValidation, setImageValidation] = useState(null);
   const [prompt, setPrompt] = useState("");
   const [target, setTarget] = useState("");
   const [rewriteMode, setRewriteMode] = useState("gemini");
@@ -108,8 +110,8 @@ export default function Home() {
           prompt_rewrite: rewriteMode,
           gemini_model: "gemini-2.0-flash",
           veo_model: veoModel,
-          use_biomedclip: Boolean(useBiomedclip),
-          biomedclip_target: useBiomedclip && target.trim() ? target.trim() : null
+          use_biomedclip: false,
+          biomedclip_target: null
         })
       });
       setJobId(resp.job_id);
@@ -173,6 +175,7 @@ export default function Home() {
     try {
       const dataUrl = await readFileAsDataUrl(file);
       setImageDataUrl(dataUrl);
+      setImageValidation(null);
     } catch (err) {
       setError(String(err?.message || err));
     }
@@ -185,6 +188,7 @@ export default function Home() {
       return;
     }
     setIsGeneratingImage(true);
+    setImageValidation(null);
     try {
       const resp = await apiFetch("/api/images/generate", {
         method: "POST",
@@ -192,14 +196,43 @@ export default function Home() {
         body: JSON.stringify({
           prompt: imagePrompt,
           model: imageModel,
-          aspect_ratio: "1:1"
+          aspect_ratio: "1:1",
+          prompt_rewrite: "gemini",
+          gemini_model: "gemini-2.0-flash",
+          use_biomedclip: Boolean(useBiomedclip),
+          biomedclip_target: useBiomedclip && target.trim() ? target.trim() : null,
+          max_rounds: 2
         })
       });
       setImageDataUrl(resp.image_data_url || "");
+      setImageValidation(resp || null);
     } catch (e) {
       setError(String(e?.message || e));
     } finally {
       setIsGeneratingImage(false);
+    }
+  }
+
+  async function onValidateImage() {
+    if (!imageDataUrl) return;
+    setError("");
+    setIsCheckingImage(true);
+    try {
+      const resp = await apiFetch("/api/images/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          input_image: imageDataUrl,
+          prompt: imagePrompt.trim() ? imagePrompt.trim() : null,
+          biomedclip_target: useBiomedclip && target.trim() ? target.trim() : null,
+          biomedclip_threshold: 0.85
+        })
+      });
+      setImageValidation(resp || null);
+    } catch (e) {
+      setError(String(e?.message || e));
+    } finally {
+      setIsCheckingImage(false);
     }
   }
 
@@ -215,7 +248,7 @@ export default function Home() {
       <header className="header">
         <div>
           <h1>Medical Diffusion</h1>
-          <p className="muted">Image + text → Veo 3.1 generation + BiomedCLIP verification + up to 1 reprompt.</p>
+          <p className="muted">Image (BiomedCLIP-checked) + text → Veo 3.1 animation (max 1 image reprompt).</p>
         </div>
         <a className="link" href="https://vercel.com" target="_blank" rel="noreferrer">
           Deploy on Vercel
@@ -229,7 +262,7 @@ export default function Home() {
             <span>Upload a medical image (PNG/JPG)</span>
             <input type="file" accept="image/*" onChange={onUploadImage} />
           </label>
-          <label className="field">
+          <div className="field">
             <span>Or generate one with AI</span>
             <div className="row" style={{ marginTop: 0 }}>
               <input
@@ -246,13 +279,36 @@ export default function Home() {
                 <option value="imagen-3.0-generate-001">imagen-3.0-generate-001</option>
                 <option value="imagen-3.0-fast-generate-001">imagen-3.0-fast-generate-001</option>
               </select>
+              <label className="row muted" style={{ gap: 8, marginTop: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={useBiomedclip}
+                  onChange={(e) => setUseBiomedclip(e.target.checked)}
+                />
+                <span>Validate image with BiomedCLIP (reprompt once)</span>
+              </label>
               {imageDataUrl ? (
-                <button className="btnSecondary" onClick={() => setImageDataUrl("")}>
+                <button
+                  className="btnSecondary"
+                  onClick={() => {
+                    setImageDataUrl("");
+                    setImageValidation(null);
+                  }}
+                >
                   Clear image
                 </button>
               ) : null}
             </div>
-          </label>
+            <label className="field" style={{ marginTop: 10 }}>
+              <span>BiomedCLIP target (optional)</span>
+              <input
+                value={target}
+                onChange={(e) => setTarget(e.target.value)}
+                placeholder='e.g. "heart" or "liver"'
+                disabled={!useBiomedclip}
+              />
+            </label>
+          </div>
         </div>
 
         <div className="imageRow">
@@ -262,6 +318,20 @@ export default function Home() {
             <div className="imagePlaceholder muted">No image selected yet.</div>
           )}
         </div>
+        {imageDataUrl && useBiomedclip ? (
+          <div className="row" style={{ marginTop: 8 }}>
+            <button className="btnSecondary" onClick={onValidateImage} disabled={isCheckingImage}>
+              {isCheckingImage ? "Checking…" : "Check image"}
+            </button>
+          </div>
+        ) : null}
+        {imageValidation?.report_summary ? (
+          <div className="muted" style={{ marginTop: 8 }}>
+            Image check: {imageValidation.report_summary}
+            {typeof imageValidation.accepted === "boolean" ? (imageValidation.accepted ? " • accepted" : " • not accepted") : ""}
+            {imageValidation.rounds ? ` • rounds=${imageValidation.rounds}` : ""}
+          </div>
+        ) : null}
 
         <div className="grid2">
           <label className="field">
@@ -270,15 +340,6 @@ export default function Home() {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder='e.g. "animate red blood cells flowing through the vessel"'
-            />
-          </label>
-          <label className="field">
-            <span>BiomedCLIP target (optional)</span>
-            <input
-              value={target}
-              onChange={(e) => setTarget(e.target.value)}
-              placeholder='e.g. "heart" or "capillary"'
-              disabled={!useBiomedclip}
             />
           </label>
         </div>
@@ -299,14 +360,6 @@ export default function Home() {
             </select>
           </label>
         </div>
-        <label className="row" style={{ gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={useBiomedclip}
-            onChange={(e) => setUseBiomedclip(e.target.checked)}
-          />
-          <span className="muted">Use BiomedCLIP medical validator</span>
-        </label>
         <div className="row">
           <button className="btn" onClick={onGenerate} disabled={job?.status === "running"}>
             {job?.status === "running" ? "Generating…" : "Generate (Veo)"}

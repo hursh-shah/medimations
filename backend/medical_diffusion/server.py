@@ -22,7 +22,7 @@ from .generation.demo import DemoBackend
 from .generation.veo_genai import VeoGenaiBackend
 from .io.export import export_final_video
 from .prompt_processor import PromptProcessor
-from .types import AnimationSpec, AgentResult
+from .types import AgentResult, AnimationSpec, GenerationResult, ValidationScore
 from .validation.biomedclip import BiomedCLIPMedicalValidator
 from .validation.medical import FrameSanityMedicalValidator
 from .validation.physics import PyBulletPhysicsValidator, RedDotGravityValidator
@@ -31,6 +31,10 @@ from .validation.physics import PyBulletPhysicsValidator, RedDotGravityValidator
 RUNS_DIR = Path(os.environ.get("MEDICAL_DIFFUSION_RUNS_DIR", "runs"))
 JOBS_DIR = RUNS_DIR / "jobs"
 LIBRARY_DIR = RUNS_DIR / "library"
+IMAGES_DIR = RUNS_DIR / "images"
+
+_biomedclip_lock = threading.Lock()
+_biomedclip_image_validator: Optional[BiomedCLIPMedicalValidator] = None
 
 
 @dataclass
@@ -102,12 +106,36 @@ class GenerateImageRequest(BaseModel):
     model: str = Field(default="imagen-3.0-generate-001", description="Image model id (google-genai)")
     aspect_ratio: str = Field(default="1:1", description="Aspect ratio, e.g. 1:1 or 3:4")
     negative_prompt: Optional[str] = Field(default=None, description="Optional negative prompt")
+    prompt_rewrite: Literal["gemini", "rule", "none"] = "gemini"
+    gemini_model: str = "gemini-2.0-flash"
+    use_biomedclip: bool = True
+    biomedclip_target: Optional[str] = None
+    biomedclip_threshold: float = 0.85
+    max_rounds: int = 2
 
 
 class GenerateImageResponse(BaseModel):
     image_data_url: str
     mime_type: str
     model: str
+    accepted: Optional[bool] = None
+    report_summary: Optional[str] = None
+    report: Optional[Dict[str, Any]] = None
+    final_prompt: Optional[str] = None
+    rounds: int = 1
+
+
+class ValidateImageRequest(BaseModel):
+    input_image: str = Field(..., min_length=1, description="Image data URL or base64")
+    prompt: Optional[str] = Field(default=None, description="Optional text context for target inference")
+    biomedclip_target: Optional[str] = None
+    biomedclip_threshold: float = 0.85
+
+
+class ValidateImageResponse(BaseModel):
+    accepted: Optional[bool] = None
+    report_summary: str
+    report: Dict[str, Any]
 
 
 class JobResponse(BaseModel):
@@ -145,6 +173,9 @@ def health() -> Dict[str, str]:
 
 @app.post("/api/generate", response_model=GenerateResponse)
 def generate(req: GenerateRequest) -> GenerateResponse:
+    if req.backend == "veo" and not (req.input_image or "").strip():
+        raise HTTPException(status_code=400, detail="input_image is required for backend=veo (image + text → video)")
+
     job_id = str(uuid.uuid4())
     job = JobState(
         job_id=job_id,
@@ -178,34 +209,105 @@ def generate_image(req: GenerateImageRequest) -> GenerateImageResponse:
     if not api_key:
         raise HTTPException(status_code=400, detail="GOOGLE_API_KEY is not set (required for image generation)")
 
+    if int(req.max_rounds or 2) < 1:
+        raise HTTPException(status_code=400, detail="max_rounds must be >= 1")
+
     client = genai.Client(api_key=api_key)
-    resp = client.models.generate_images(
-        model=req.model,
-        prompt=req.prompt,
-        config=types.GenerateImagesConfig(
-            negative_prompt=req.negative_prompt or None,
-            number_of_images=1,
+    max_rounds = min(2, int(req.max_rounds or 2))
+    biomedclip_threshold = float(req.biomedclip_threshold or 0.85)
+
+    original_user_prompt = req.prompt.strip()
+    prompt = original_user_prompt
+    negative_prompt = (req.negative_prompt or "").strip() or _default_image_negative_prompt()
+
+    run_id = str(uuid.uuid4())
+    out_dir = IMAGES_DIR / run_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    accepted: Optional[bool] = None
+    report: Optional[Dict[str, Any]] = None
+    report_summary: Optional[str] = None
+    final_prompt: Optional[str] = None
+    rounds = 0
+
+    image_bytes: Optional[bytes] = None
+    mime_type: str = "image/png"
+
+    for round_index in range(max_rounds):
+        rounds = round_index + 1
+        image_bytes, mime_type = _genai_generate_image_bytes(
+            client=client,
+            types=types,
+            model=req.model,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
             aspect_ratio=req.aspect_ratio,
-            add_watermark=False,
-            output_mime_type="image/png",
-        ),
-    )
+        )
+        image_path = out_dir / f"round_{round_index:02d}.png"
+        image_path.write_bytes(image_bytes)
 
-    generated = (getattr(resp, "generated_images", None) or [])[:1]
-    if not generated:
-        raise HTTPException(status_code=500, detail="Image model returned no images")
+        if not req.use_biomedclip:
+            accepted = None
+            final_prompt = prompt
+            break
 
-    image = getattr(generated[0], "image", None)
-    image_bytes = getattr(image, "image_bytes", None)
-    mime_type = (getattr(image, "mime_type", None) or "image/png").strip()
+        score = _score_image_with_biomedclip(
+            image_path=image_path,
+            prompt=prompt,
+            target=req.biomedclip_target,
+        )
+        accepted = bool(score.score >= biomedclip_threshold) if not score.skipped else True
+        report = asdict(score)
+        report_summary = f"biomedclip={score.score:.3f}" + (" (skipped)" if score.skipped else "")
+        final_prompt = prompt
+
+        if accepted:
+            break
+
+        if round_index >= max_rounds - 1:
+            break
+
+        prompt, negative_prompt = _reprompt_image_prompt(
+            original_user_prompt=original_user_prompt,
+            previous_prompt=prompt,
+            previous_negative_prompt=negative_prompt,
+            biomedclip_score=score,
+            mode=req.prompt_rewrite,
+            gemini_model=req.gemini_model,
+        )
+
     if not image_bytes:
-        raise HTTPException(status_code=500, detail="Image model returned empty image bytes")
+        raise HTTPException(status_code=500, detail="Image generation failed")
 
     b64 = base64.b64encode(image_bytes).decode("ascii")
     return GenerateImageResponse(
         image_data_url=f"data:{mime_type};base64,{b64}",
         mime_type=mime_type,
         model=req.model,
+        accepted=accepted,
+        report_summary=report_summary,
+        report=report,
+        final_prompt=final_prompt,
+        rounds=rounds,
+    )
+
+
+@app.post("/api/images/validate", response_model=ValidateImageResponse)
+def validate_image(req: ValidateImageRequest) -> ValidateImageResponse:
+    out_dir = IMAGES_DIR / f"validate_{uuid.uuid4()}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    image_path = _save_input_image(data=req.input_image, output_path=out_dir / "input_image.png")
+
+    prompt = (req.prompt or "").strip() or (req.biomedclip_target or "")
+    score = _score_image_with_biomedclip(image_path=image_path, prompt=prompt, target=req.biomedclip_target)
+
+    threshold = float(req.biomedclip_threshold or 0.85)
+    accepted = None if score.skipped else bool(score.score >= threshold)
+    report_summary = f"biomedclip={score.score:.3f}" + (" (skipped)" if score.skipped else "")
+    return ValidateImageResponse(
+        accepted=accepted,
+        report_summary=report_summary,
+        report=asdict(score),
     )
 
 
@@ -289,9 +391,6 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
         backend = _make_backend(req)
 
         medical_validators = [FrameSanityMedicalValidator()]
-        biomed_target = req.biomedclip_target or str(spec.metadata.get("target_label") or "").strip() or None
-        if req.use_biomedclip:
-            medical_validators.append(BiomedCLIPMedicalValidator(target_label=biomed_target))
 
         physics_validators = [RedDotGravityValidator(), PyBulletPhysicsValidator()]
 
@@ -395,7 +494,144 @@ def _make_backend(req: GenerateRequest):
     raise ValueError(f"Unsupported backend: {req.backend}")
 
 
-_DATA_URL_RE = re.compile(r"^data:(?P<mime>[-\\w.+/]+)?;base64,(?P<b64>.*)$", re.DOTALL)
+def _default_image_negative_prompt() -> str:
+    return "text, watermark, labels, low quality, blurry, cartoon, anime, unrealistic anatomy"
+
+
+def _genai_generate_image_bytes(
+    *,
+    client: Any,
+    types: Any,
+    model: str,
+    prompt: str,
+    negative_prompt: Optional[str],
+    aspect_ratio: str,
+) -> tuple[bytes, str]:
+    resp = client.models.generate_images(
+        model=model,
+        prompt=prompt,
+        config=types.GenerateImagesConfig(
+            negative_prompt=(negative_prompt or "").strip() or None,
+            number_of_images=1,
+            aspect_ratio=aspect_ratio,
+            add_watermark=False,
+            output_mime_type="image/png",
+        ),
+    )
+
+    generated = (getattr(resp, "generated_images", None) or [])[:1]
+    if not generated:
+        raise HTTPException(status_code=500, detail="Image model returned no images")
+
+    image = getattr(generated[0], "image", None)
+    image_bytes = getattr(image, "image_bytes", None)
+    mime_type = (getattr(image, "mime_type", None) or "image/png").strip()
+    if not image_bytes:
+        raise HTTPException(status_code=500, detail="Image model returned empty image bytes")
+
+    return bytes(image_bytes), mime_type
+
+
+def _get_biomedclip_image_validator() -> BiomedCLIPMedicalValidator:
+    global _biomedclip_image_validator
+    if _biomedclip_image_validator is None:
+        _biomedclip_image_validator = BiomedCLIPMedicalValidator(n_frames=1)
+    return _biomedclip_image_validator
+
+
+def _score_image_with_biomedclip(*, image_path: Path, prompt: str, target: Optional[str]) -> ValidationScore:
+    spec = AnimationSpec(prompt=prompt, metadata={"biomedclip_target": target} if target else {})
+    generation = GenerationResult(
+        spec=spec,
+        frames=[image_path],
+        frames_dir=image_path.parent,
+        backend="image",
+        metadata={"image_path": str(image_path)},
+    )
+    with _biomedclip_lock:
+        validator = _get_biomedclip_image_validator()
+        return validator.score(generation)
+
+
+def _reprompt_image_prompt(
+    *,
+    original_user_prompt: str,
+    previous_prompt: str,
+    previous_negative_prompt: str,
+    biomedclip_score: ValidationScore,
+    mode: str,
+    gemini_model: str,
+) -> tuple[str, str]:
+    mode = (mode or "gemini").strip().lower()
+    if mode == "none":
+        return previous_prompt, previous_negative_prompt
+
+    suggested: List[str] = []
+    top_guess = None
+    target_label = None
+    if isinstance(getattr(biomedclip_score, "details", None), dict):
+        target_label = biomedclip_score.details.get("target_label")
+        top_guess = biomedclip_score.details.get("top_guess")
+        maybe = biomedclip_score.details.get("suggested_keywords")
+        if isinstance(maybe, list):
+            suggested.extend([str(x).strip() for x in maybe if str(x).strip()])
+    suggested = suggested[:12]
+
+    if mode == "rule":
+        next_prompt = previous_prompt.rstrip()
+        if suggested:
+            next_prompt = next_prompt + " " + " ".join(suggested)
+        else:
+            next_prompt = next_prompt + " medically accurate, anatomically correct, clinical, no text, no watermark"
+        return next_prompt, previous_negative_prompt
+
+    if mode != "gemini":
+        return previous_prompt, previous_negative_prompt
+
+    system = """You are a prompt engineer for biomedical image generation (e.g. Imagen).
+
+You will be given:
+- the original user request for a biomedical image
+- the previous image prompt
+- BiomedCLIP score + feedback + top labels (a guardrail signal, not an oracle)
+
+Goal: produce a medically plausible, anatomically correct, realistic biomedical image that matches the intended anatomy/view/modality.
+
+Output STRICT JSON (no markdown):
+{
+  "image_prompt": "string",
+  "negative_prompt": "string"
+}
+Keep the prompt one concise paragraph. Include: anatomy, modality (if relevant), viewpoint, style, constraints (no text/labels/watermark).
+"""
+
+    user = f"""original_user_request: {original_user_prompt}
+previous_image_prompt: {previous_prompt}
+biomedclip_score: {biomedclip_score.score:.3f}
+biomedclip_feedback: {biomedclip_score.feedback}
+biomedclip_target_label: {target_label}
+biomedclip_top_guess: {top_guess}
+suggested_keywords: {", ".join(suggested)}
+"""
+
+    try:
+        from .gemini import generate_json, get_optional_str, load_gemini_config
+
+        cfg = load_gemini_config(model=gemini_model)
+        data = generate_json(system=system, user=user, config=cfg)
+        next_prompt = get_optional_str(data, "image_prompt")
+        next_negative = get_optional_str(data, "negative_prompt")
+        if not next_prompt:
+            raise RuntimeError("Gemini returned no image_prompt")
+        return next_prompt, next_negative or previous_negative_prompt
+    except Exception:
+        # Fallback to rule-based keyword injection.
+        next_prompt = previous_prompt.rstrip()
+        if suggested:
+            next_prompt = next_prompt + " " + " ".join(suggested)
+        else:
+            next_prompt = next_prompt + " medically accurate, anatomically correct, clinical, no text, no watermark"
+        return next_prompt, previous_negative_prompt
 
 
 def _save_input_image(*, data: str, output_path: Path) -> Path:
@@ -412,30 +648,63 @@ def _save_input_image(*, data: str, output_path: Path) -> Path:
 
     mime_type = None
     b64 = raw
-    m = _DATA_URL_RE.match(raw)
-    if m:
-        mime_type = (m.group("mime") or "").strip() or None
-        b64 = m.group("b64") or ""
+    if raw.lower().startswith("data:"):
+        header, comma, payload = raw.partition(",")
+        if not comma:
+            raise ValueError("input_image data URL is missing a comma separator")
+        header = header[5:]  # strip leading "data:"
+        mime_part, _, params_part = header.partition(";")
+        mime_type = mime_part.strip() or None
+        params = [p.strip() for p in params_part.split(";") if p.strip()]
+        if not any(p.lower() == "base64" for p in params):
+            raise ValueError("input_image data URL must be base64-encoded")
+        b64 = payload
+
+    # remove all whitespace correctly
+    b64_clean = re.sub(r"\s+", "", b64)
+    # fix missing base64 padding
+    pad = (-len(b64_clean)) % 4
+    if pad:
+        b64_clean = b64_clean + ("=" * pad)
 
     try:
-        decoded = base64.b64decode(re.sub(r"\\s+", "", b64), validate=False)
+        decoded = base64.b64decode(b64_clean, validate=False)
     except Exception as e:
-        raise ValueError("input_image is not valid base64") from e
+        hint = f" ({mime_type})" if mime_type else ""
+        raise ValueError(f"input_image is not valid base64{hint}") from e
+
+    # magic bytes for debugging
+    magic = decoded[:16]
+    magic_hex = " ".join(f"{b:02x}" for b in magic)
 
     try:
+        # HEIC/HEIF support (Apple tax)
+        try:
+            import pillow_heif  # type: ignore
+            pillow_heif.register_heif_opener()
+        except Exception:
+            # If it's HEIC and this isn't installed, Pillow will fail below.
+            pass
+
         from PIL import Image
 
         img = Image.open(io.BytesIO(decoded))
+        img.load()  # force decode now, so we fail here if it's unsupported
+
+        # normalize
         img = img.convert("RGB")
+
         output_path = output_path.with_suffix(".png")
         output_path.parent.mkdir(parents=True, exist_ok=True)
         img.save(output_path, format="PNG")
         return output_path
+
     except Exception as e:
         hint = f" ({mime_type})" if mime_type else ""
-        raise ValueError(f"input_image could not be decoded as an image{hint}") from e
-
-
+        raise ValueError(
+            f"input_image could not be decoded as an image{hint}. "
+            f"First bytes: {magic_hex}"
+        ) from e
 def _validate_job_id(job_id: str) -> None:
     try:
         uuid.UUID(job_id)

@@ -120,16 +120,15 @@ class BiomedCLIPMedicalValidator:
             )
 
         labels = list(self._labels)
-        target = self._target_label or infer_target_label(generation.spec.prompt, candidate_labels=labels)
-        if not target:
-            return ValidationScore(
-                name=self.name,
-                score=1.0,
-                skipped=True,
-                feedback="No target label provided and none could be inferred from prompt",
-                details={"skipped_reason": "missing_target_label", "labels": labels},
-            )
-        if target not in labels:
+        metadata_target = None
+        if isinstance(getattr(generation.spec, "metadata", None), dict):
+            raw = generation.spec.metadata.get("biomedclip_target") or generation.spec.metadata.get("target_label")
+            if raw is not None:
+                metadata_target = str(raw).strip() or None
+
+        target = self._target_label or metadata_target or infer_target_label(generation.spec.prompt, candidate_labels=labels)
+        target_known = bool(target)
+        if target_known and target not in labels:
             labels = [target] + [l for l in labels if l != target]
 
         frame_paths = _uniform_sample(generation.frames, self._n_frames)
@@ -154,15 +153,18 @@ class BiomedCLIPMedicalValidator:
         probs = self._F.softmax(logits, dim=-1).detach().cpu()
         logits_cpu = logits.detach().cpu()
 
-        target_idx = labels.index(target)
         top_k = max(1, int(self._thresholds.top_k))
 
         frame_predictions: List[Dict[str, Any]] = []
         label_hist: Dict[str, int] = {l: 0 for l in labels}
-        top1_hits = 0
-        topk_hits = 0
-        margins: List[float] = []
-        target_confs: List[float] = []
+        top_probs: List[float] = []
+
+        if target_known:
+            target_idx = labels.index(target)
+            top1_hits = 0
+            topk_hits = 0
+            margins: List[float] = []
+            target_confs: List[float] = []
 
         for i in range(probs.shape[0]):
             row_p = probs[i]
@@ -170,30 +172,36 @@ class BiomedCLIPMedicalValidator:
             sorted_idx = row_p.argsort(descending=True)
             top1 = int(sorted_idx[0].item())
             label_hist[labels[top1]] = int(label_hist.get(labels[top1], 0)) + 1
-
-            rank = (
-                int((sorted_idx == target_idx).nonzero(as_tuple=False)[0].item())
-                if (sorted_idx == target_idx).any().item()
-                else len(labels)
-            )
-            if top1 == target_idx:
-                top1_hits += 1
-            if rank < top_k:
-                topk_hits += 1
-
-            # Margin: target vs best non-target.
-            best_non_target = float("-inf")
-            for j in range(len(labels)):
-                if j == target_idx:
-                    continue
-                best_non_target = max(best_non_target, float(row_l[j].item()))
-            margin = float(row_l[target_idx].item()) - float(best_non_target)
-            margins.append(margin)
-
-            target_conf = float(row_p[target_idx].item())
-            target_confs.append(target_conf)
+            top_probs.append(float(row_p[top1].item()))
 
             topk_labels = [labels[int(j.item())] for j in sorted_idx[:top_k]]
+
+            rank = None
+            target_conf = None
+            margin = None
+            if target_known:
+                rank = (
+                    int((sorted_idx == target_idx).nonzero(as_tuple=False)[0].item())
+                    if (sorted_idx == target_idx).any().item()
+                    else len(labels)
+                )
+                if top1 == target_idx:
+                    top1_hits += 1
+                if rank < top_k:
+                    topk_hits += 1
+
+                # Margin: target vs best non-target.
+                best_non_target = float("-inf")
+                for j in range(len(labels)):
+                    if j == target_idx:
+                        continue
+                    best_non_target = max(best_non_target, float(row_l[j].item()))
+                margin = float(row_l[target_idx].item()) - float(best_non_target)
+                margins.append(margin)
+
+                target_conf = float(row_p[target_idx].item())
+                target_confs.append(target_conf)
+
             frame_predictions.append(
                 {
                     "frame_index": i,
@@ -203,7 +211,36 @@ class BiomedCLIPMedicalValidator:
                     "target_prob": target_conf,
                     "target_rank": rank,
                     "topk_labels": topk_labels,
+                    "target_margin": margin,
                 }
+            )
+
+        confusion = sorted(label_hist.items(), key=lambda kv: (-kv[1], kv[0]))
+        top_guess = confusion[0][0] if confusion else None
+        mean_top_prob = sum(top_probs) / max(1, len(top_probs))
+
+        if not target_known:
+            feedback = f"BiomedCLIP top guess: '{top_guess}' (provide biomedclip_target to enforce a specific anatomy)"
+            suggested_keywords = (
+                _suggest_keywords(target_label=top_guess, label_histogram=label_hist, prompt=generation.spec.prompt)
+                if top_guess
+                else []
+            )
+            return ValidationScore(
+                name=self.name,
+                score=float(mean_top_prob),
+                skipped=True,
+                details={
+                    "target_label": None,
+                    "labels": labels,
+                    "n_frames_sampled": len(frame_predictions),
+                    "label_histogram": label_hist,
+                    "top_guess": top_guess,
+                    "metrics": {"mean_top1_confidence": mean_top_prob},
+                    "frame_predictions": frame_predictions[: min(24, len(frame_predictions))],
+                    "suggested_keywords": suggested_keywords,
+                },
+                feedback=feedback,
             )
 
         n = float(len(frame_predictions) or 1)
@@ -227,8 +264,6 @@ class BiomedCLIPMedicalValidator:
         )
         feedback = ""
         if score < 0.85:
-            confusion = sorted(label_hist.items(), key=lambda kv: (-kv[1], kv[0]))
-            top_guess = confusion[0][0] if confusion else None
             if top_guess and top_guess != target:
                 feedback = f"BiomedCLIP frames resemble '{top_guess}' more than target '{target}'; emphasize the target anatomy/view"
             else:
@@ -253,8 +288,10 @@ class BiomedCLIPMedicalValidator:
                     "target_topk_ratio": target_topk_ratio,
                     "mean_margin": mean_margin,
                     "mean_target_confidence": mean_target_conf,
+                    "mean_top1_confidence": mean_top_prob,
                 },
                 "label_histogram": label_hist,
+                "top_guess": top_guess,
                 "frame_predictions": frame_predictions[: min(24, len(frame_predictions))],
                 "suggested_keywords": suggested_keywords,
             },

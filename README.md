@@ -1,7 +1,7 @@
 ## Medical Diffusion (Hackathon)
 
 This repo contains:
-- `backend/`: Python generation + agent loop (Veo 3.1), BiomedCLIP verifier, and an API server.
+- `backend/`: Python generation + agent loop (Veo 3.1), BiomedCLIP image verifier, and an API server.
 - `frontend/`: Vercel-ready Next.js UI for **image + text → video** (upload/generate an image, then animate it).
 
 ### Local dev

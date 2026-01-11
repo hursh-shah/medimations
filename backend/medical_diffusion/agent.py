@@ -86,10 +86,10 @@ You will be given:
 - suggested keywords to fix medical/physics issues
 
 Output STRICT JSON (no markdown):
-{
+{{
   "veo_prompt": "string",
   "negative_prompt": "string"
-}
+}}
 Keep the prompt a single concise paragraph. Include: subject, action, setting, camera, style, constraints (no on-screen text/watermark).
 {ref_constraint}
 """

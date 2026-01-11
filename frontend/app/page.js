@@ -1208,7 +1208,7 @@ export default function Home() {
         <div className="sidebarFooter">
           <div className="statusPill">
             <div className="statusDot" />
-            <span>{backendBase() || "Local"}</span>
+            <span>{backendBase() ? "Railway status: online" : "Local mode"}</span>
           </div>
         </div>
       </aside>

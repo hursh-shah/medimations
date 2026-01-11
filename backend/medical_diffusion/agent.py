@@ -52,7 +52,7 @@ class GeminiPromptAdjuster(PromptAdjuster):
     Falls back to RuleBasedPromptAdjuster if Gemini is unavailable.
     """
 
-    def __init__(self, *, model: str = "gemini-2.0-flash") -> None:
+    def __init__(self, *, model: str = "gemini-3.0-flash") -> None:
         self._model = model
         self._fallback = RuleBasedPromptAdjuster()
 

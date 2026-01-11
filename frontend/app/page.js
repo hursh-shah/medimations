@@ -2,9 +2,22 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+class ApiError extends Error {
+  constructor(status, body) {
+    super(body || `Request failed (${status})`);
+    this.status = status;
+    this.body = body || "";
+  }
+}
+
 function backendBase() {
   const raw = process.env.NEXT_PUBLIC_BACKEND_URL || "";
-  return raw.replace(/\/+$/, "");
+  const cleaned = raw.trim().replace(/\/+$/, "");
+  if (!cleaned) return "";
+  if (/^https?:\/\//i.test(cleaned)) return cleaned;
+  if (cleaned.startsWith("//")) return `https:${cleaned}`;
+  if (/^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$/i.test(cleaned)) return `http://${cleaned}`;
+  return `https://${cleaned}`;
 }
 
 async function apiFetch(path, init) {
@@ -13,7 +26,7 @@ async function apiFetch(path, init) {
   const res = await fetch(url, init);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(text || `Request failed (${res.status})`);
+    throw new ApiError(res.status, text);
   }
   return res.json();
 }
@@ -44,12 +57,23 @@ export default function Home() {
   }
 
   async function refreshJob(id) {
-    const data = await apiFetch(`/api/jobs/${id}`);
-    setJob(data.job);
-    if (data.job.status === "done" || data.job.status === "error") {
-      if (pollRef.current) clearInterval(pollRef.current);
-      pollRef.current = null;
-      await refreshLibrary();
+    try {
+      const data = await apiFetch(`/api/jobs/${id}`);
+      setJob(data.job);
+      if (data.job.status === "done" || data.job.status === "error") {
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = null;
+        await refreshLibrary();
+      }
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) {
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = null;
+        setError("Job not found on backend (server restarted or job expired). Please generate again.");
+        await refreshLibrary();
+        return;
+      }
+      throw e;
     }
   }
 

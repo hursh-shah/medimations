@@ -5,7 +5,7 @@ import json
 import os
 import threading
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
@@ -52,6 +52,7 @@ class JobState:
 
 _jobs_lock = threading.Lock()
 _jobs: Dict[str, JobState] = {}
+_job_fields = {f.name for f in fields(JobState)}
 
 
 class GenerateRequest(BaseModel):
@@ -110,6 +111,11 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+def root() -> Dict[str, str]:
+    return {"ok": "true", "health": "/api/health", "docs": "/docs"}
+
+
 @app.get("/api/health")
 def health() -> Dict[str, str]:
     return {"ok": "true"}
@@ -129,6 +135,7 @@ def generate(req: GenerateRequest) -> GenerateResponse:
     )
     with _jobs_lock:
         _jobs[job_id] = job
+    _persist_job(job)
 
     thread = threading.Thread(target=_run_job, args=(job_id, req), daemon=True)
     thread.start()
@@ -142,7 +149,12 @@ def job_status(job_id: str) -> JobResponse:
     with _jobs_lock:
         job = _jobs.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        job = _load_job(job_id)
+        if job:
+            with _jobs_lock:
+                _jobs[job_id] = job
+        else:
+            raise HTTPException(status_code=404, detail="Job not found")
     return JobResponse(job=asdict(job))
 
 
@@ -319,7 +331,44 @@ def _update_job(job_id: str, **kwargs: Any) -> None:
     with _jobs_lock:
         job = _jobs.get(job_id)
         if not job:
-            return
+            job = _load_job(job_id) or JobState(job_id=job_id)
+            _jobs[job_id] = job
         for k, v in kwargs.items():
             setattr(job, k, v)
         job.updated_at = _dt.datetime.utcnow().isoformat() + "Z"
+    _persist_job(job)
+
+
+def _job_state_path(job_id: str) -> Path:
+    return JOBS_DIR / f"{job_id}.json"
+
+
+def _persist_job(job: JobState) -> None:
+    try:
+        JOBS_DIR.mkdir(parents=True, exist_ok=True)
+        path = _job_state_path(job.job_id)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(asdict(job), ensure_ascii=False))
+        tmp.replace(path)
+    except Exception:
+        # Best-effort persistence; do not fail requests/jobs due to IO issues.
+        return
+
+
+def _load_job(job_id: str) -> Optional[JobState]:
+    path = _job_state_path(job_id)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    if not data.get("job_id"):
+        return None
+    kwargs = {k: data.get(k) for k in _job_fields if k in data}
+    try:
+        return JobState(**kwargs)
+    except Exception:
+        return None

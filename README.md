@@ -1,4 +1,4 @@
-## Medical Diffusion (Hackathon)
+## Medimations
 
 This repo contains:
 - `backend/`: Python generation + agent loop (Veo 3.1), BiomedCLIP image verifier, and an API server.

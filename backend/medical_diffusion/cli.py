@@ -7,12 +7,11 @@ from typing import Optional
 
 from .agent import AgentConfig, ValidatorAgent
 from .agent import GeminiPromptAdjuster
-from .generation.mock import MockDiffusionBackend
 from .io.export import export_final_video
 from .io.video import VideoEncodeError
 from .prompt_processor import PromptProcessor
 from .validation.biomedclip import BiomedCLIPMedicalValidator
-from .validation.medical import FrameSanityMedicalValidator, KeywordLibraryMedicalValidator, ReferenceLibrary
+from .validation.medical import FrameSanityMedicalValidator
 from .validation.physics import PyBulletPhysicsValidator, RedDotGravityValidator
 
 
@@ -22,26 +21,15 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     run_p = sub.add_parser("run", help="Generate + validate with agent loop")
     run_p.add_argument("--prompt", required=True, help="User prompt for the animation")
-    run_p.add_argument("--backend", default="mock", choices=["mock", "veo"], help="Generator backend")
     run_p.add_argument("--out", default="runs/output.mp4", help="Output video path")
     run_p.add_argument("--no-video", action="store_true", help="Skip ffmpeg encode; leave frames on disk")
-    run_p.add_argument("--reference-dir", default=None, help="Optional reference library dir (manifest.json)")
     run_p.add_argument("--negative-prompt", default=None, help="Optional negative prompt (backends that support it)")
-    run_p.add_argument("--veo-model", default="veo-3.1-fast-generate-preview", help="Veo model id (backend=veo)")
-    run_p.add_argument("--veo-aspect-ratio", default="9:16", help="Veo aspect ratio, e.g. 9:16 (backend=veo)")
-    run_p.add_argument("--veo-resolution", default="720p", help="Veo resolution, e.g. 720p (backend=veo)")
-    run_p.add_argument("--veo-poll-seconds", type=int, default=20, help="Polling interval for Veo operations (backend=veo)")
-    run_p.add_argument("--prompt-rewrite", default="gemini", choices=["none", "rule", "gemini"], help="Prompt rewrite mode (backend=veo)")
+    run_p.add_argument("--veo-model", default="veo-3.1-fast-generate-preview", help="Veo model id")
+    run_p.add_argument("--veo-aspect-ratio", default="9:16", help="Veo aspect ratio, e.g. 9:16")
+    run_p.add_argument("--veo-resolution", default="720p", help="Veo resolution, e.g. 720p")
+    run_p.add_argument("--veo-poll-seconds", type=int, default=20, help="Polling interval for Veo operations")
+    run_p.add_argument("--prompt-rewrite", default="gemini", choices=["none", "rule", "gemini"], help="Prompt rewrite mode")
     run_p.add_argument("--gemini-model", default="gemini-2.0-flash", help="Gemini model for prompt rewriting/reprompting")
-    run_p.add_argument("--medmnist-organ3d", action="store_true", help="Use MedMNIST OrganMNIST3D as visual reference memory")
-    run_p.add_argument("--medmnist-root", default=".cache/medmnist", help="Cache/download dir for MedMNIST")
-    run_p.add_argument("--medmnist-size", type=int, default=28, help="OrganMNIST3D size (28 or 64)")
-    run_p.add_argument("--medmnist-split", default="train", choices=["train", "val", "test"], help="Split used to build prototypes")
-    run_p.add_argument("--medmnist-download", action="store_true", help="Allow downloading OrganMNIST3D if missing")
-    run_p.add_argument("--medmnist-max-per-label", type=int, default=64, help="Max samples per organ kept in memory")
-    run_p.add_argument("--medmnist-export-gifs", default=None, help="Optional dir to export reference GIFs")
-    run_p.add_argument("--medmnist-gifs-per-label", type=int, default=2, help="GIFs to export per organ")
-    run_p.add_argument("--medmnist-force-rebuild", action="store_true", help="Rebuild prototypes even if cached")
     run_p.add_argument("--biomedclip", action="store_true", help="Enable BiomedCLIP frame verifier (requires torch + open_clip_torch)")
     run_p.add_argument("--biomedclip-target", default=None, help="Expected target label (e.g. 'liver'); inferred from prompt if omitted")
     run_p.add_argument("--biomedclip-labels", default=None, help="Comma-separated labels (or path to a newline-delimited .txt)")
@@ -90,51 +78,26 @@ def _run(args: argparse.Namespace) -> int:
         spec = replace(spec, metadata=metadata)
 
     prompt_adjuster = None
-    if args.backend == "veo":
-        if args.prompt_rewrite == "none":
-            pass
-        elif args.prompt_rewrite == "rule":
-            spec = processor.rewrite_for_veo(spec)
-        elif args.prompt_rewrite == "gemini":
-            spec = processor.rewrite_for_veo_gemini(spec, model=args.gemini_model)
-            prompt_adjuster = GeminiPromptAdjuster(model=args.gemini_model)
-        else:
-            raise ValueError(f"Unsupported --prompt-rewrite: {args.prompt_rewrite}")
-
-    if args.backend == "mock":
-        backend = MockDiffusionBackend()
-    elif args.backend == "veo":
-        from .generation.veo_genai import VeoGenaiBackend
-
-        backend = VeoGenaiBackend(
-            model=args.veo_model,
-            aspect_ratio=args.veo_aspect_ratio,
-            resolution=args.veo_resolution,
-            poll_seconds=args.veo_poll_seconds,
-        )
+    if args.prompt_rewrite == "none":
+        pass
+    elif args.prompt_rewrite == "rule":
+        spec = processor.rewrite_for_veo(spec)
+    elif args.prompt_rewrite == "gemini":
+        spec = processor.rewrite_for_veo_gemini(spec, model=args.gemini_model)
+        prompt_adjuster = GeminiPromptAdjuster(model=args.gemini_model)
     else:
-        raise ValueError(f"Unsupported backend: {args.backend}")
+        raise ValueError(f"Unsupported --prompt-rewrite: {args.prompt_rewrite}")
+
+    from .generation.veo_genai import VeoGenaiBackend
+
+    backend = VeoGenaiBackend(
+        model=args.veo_model,
+        aspect_ratio=args.veo_aspect_ratio,
+        resolution=args.veo_resolution,
+        poll_seconds=args.veo_poll_seconds,
+    )
 
     medical_validators = [FrameSanityMedicalValidator()]
-    if args.reference_dir:
-        ref = ReferenceLibrary.from_dir(Path(args.reference_dir))
-        medical_validators.append(KeywordLibraryMedicalValidator(reference=ref))
-    if args.medmnist_organ3d:
-        from .validation.organmnist3d import OrganMNIST3DVisualValidator
-
-        export_dir = Path(args.medmnist_export_gifs) if args.medmnist_export_gifs else None
-        medical_validators.append(
-            OrganMNIST3DVisualValidator(
-                root=Path(args.medmnist_root),
-                size=args.medmnist_size,
-                split=args.medmnist_split,
-                download=args.medmnist_download,
-                max_per_label=args.medmnist_max_per_label,
-                force_rebuild=args.medmnist_force_rebuild,
-                export_gifs_dir=export_dir,
-                gifs_per_label=int(args.medmnist_gifs_per_label or 0),
-            )
-        )
     if args.biomedclip:
         medical_validators.append(
             BiomedCLIPMedicalValidator(

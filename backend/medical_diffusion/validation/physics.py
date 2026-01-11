@@ -10,7 +10,7 @@ from ..types import GenerationResult, ValidationScore
 
 class RedDotGravityValidator:
     """
-    Toy physics validator for the mock backend:
+    Toy physics validator (example only):
     - tracks the reddest pixel location across frames
     - checks that y(t) has roughly constant positive acceleration
 

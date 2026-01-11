@@ -11,8 +11,3 @@ torch
 pillow
 open_clip_torch==2.23.0
 transformers==4.35.2
-
-# Captions + narration (templates)
-twelvelabs
-deepgram-sdk
-

@@ -68,7 +68,6 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt,
-          backend: "veo",
           prompt_rewrite: "gemini",
           use_biomedclip: true,
           biomedclip_target: target.trim() ? target.trim() : null
@@ -183,4 +182,3 @@ export default function Home() {
     </main>
   );
 }
-

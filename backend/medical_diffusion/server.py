@@ -15,7 +15,6 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .agent import AgentConfig, GeminiPromptAdjuster, ValidatorAgent
-from .generation.mock import MockDiffusionBackend
 from .generation.veo_genai import VeoGenaiBackend
 from .io.export import export_final_video
 from .prompt_processor import PromptProcessor
@@ -57,7 +56,7 @@ _jobs: Dict[str, JobState] = {}
 
 class GenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=1, description="User prompt, e.g. 'heart surgery video'")
-    backend: Literal["veo", "mock"] = "veo"
+    backend: Literal["veo"] = "veo"
 
     prompt_rewrite: Literal["gemini", "rule", "none"] = "gemini"
     gemini_model: str = "gemini-2.0-flash"
@@ -299,8 +298,6 @@ def _apply_overrides(spec: AnimationSpec, req: GenerateRequest) -> AnimationSpec
 
 
 def _make_backend(req: GenerateRequest):
-    if req.backend == "mock":
-        return MockDiffusionBackend()
     if req.backend == "veo":
         return VeoGenaiBackend(
             model=req.veo_model,
@@ -326,4 +323,3 @@ def _update_job(job_id: str, **kwargs: Any) -> None:
         for k, v in kwargs.items():
             setattr(job, k, v)
         job.updated_at = _dt.datetime.utcnow().isoformat() + "Z"
-

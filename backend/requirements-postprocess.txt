@@ -1,0 +1,5 @@
+# Optional deps for captioning + TTS templates (not used by the API server yet)
+
+twelvelabs
+deepgram-sdk
+

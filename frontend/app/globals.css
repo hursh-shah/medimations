@@ -513,50 +513,61 @@ html, body {
   margin: 0 auto;
 }
 
-.formSection {
+/* Create page - clean, tool-focused */
+.createHeader {
+  margin-bottom: 32px;
+}
+
+.createTitle {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin-bottom: 6px;
+}
+
+.createSubtitle {
+  font-size: 14px;
+  color: var(--text-tertiary);
+}
+
+.createForm {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.formGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.formGroupLabel {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+}
+
+.formGroupContent {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  margin-bottom: 16px;
+  border-radius: var(--radius-lg);
+  padding: 20px;
 }
 
-.formSectionHeader {
+.formDivider {
+  height: 1px;
+  background: var(--border);
+  margin: 8px 0;
+}
+
+.formActions {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 18px 22px;
-  border-bottom: 1px solid var(--border);
-}
-
-.formSectionIcon {
-  width: 40px;
-  height: 40px;
-  background: var(--accent-muted);
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.formSectionIcon svg {
-  width: 20px;
-  height: 20px;
-  color: var(--accent);
-}
-
-.formSectionTitle {
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.formSectionDesc {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  margin-top: 2px;
-}
-
-.formSectionBody {
-  padding: 22px;
+  justify-content: space-between;
+  padding-top: 8px;
 }
 
 /* Form Elements */

@@ -412,48 +412,48 @@ function CreateView({ onGenerate, isGenerating, generationStatus, error }) {
   }
 
   return (
-    <div className="createContainer animate-slideUp">
-      {/* Step 1 */}
-      <div className="formSection">
-        <div className="formSectionHeader">
-          <div className="formSectionIcon"><ImageIcon /></div>
-          <div>
-            <div className="formSectionTitle">Medical Image</div>
-            <div className="formSectionDesc">Upload or generate a base image</div>
-          </div>
-        </div>
-        <div className="formSectionBody">
+    <div className="createContainer animate-fadeIn">
+      <div className="createHeader">
+        <h2 className="createTitle">New Animation</h2>
+        <p className="createSubtitle">Generate a medical animation from an image and description.</p>
+      </div>
+
+      <div className="createForm">
+        {/* Source Image */}
+        <div className="formGroup">
+          <div className="formGroupLabel">Source Image</div>
           {!imageDataUrl ? (
-            <div className="formGrid">
-              <label className="uploadZone">
-                <input type="file" accept="image/*" onChange={handleUploadImage} style={{ display: "none" }} />
-                <div className="uploadIcon"><Upload /></div>
-                <div className="uploadText">Upload Image</div>
-                <div className="uploadHint">PNG, JPG up to 8MB</div>
-              </label>
-              
-              <div className="formField">
-                <div className="formLabel">Generate with AI</div>
-                <div className="inlineRow">
+            <div className="formGroupContent">
+              <div className="formGrid">
+                <label className="uploadZone">
+                  <input type="file" accept="image/*" onChange={handleUploadImage} style={{ display: "none" }} />
+                  <div className="uploadIcon"><Upload /></div>
+                  <div className="uploadText">Upload</div>
+                  <div className="uploadHint">PNG, JPG</div>
+                </label>
+                
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                   <input
                     className="input"
                     value={imagePrompt}
                     onChange={(e) => setImagePrompt(e.target.value)}
-                    placeholder='e.g. "CT scan of liver"'
+                    placeholder="Or describe image to generate..."
                   />
-                  <button 
-                    className="btn btnPrimary btnSm"
-                    onClick={handleGenerateImage}
-                    disabled={isGeneratingImage || !imagePrompt.trim()}
-                  >
-                    {isGeneratingImage ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
-                  </button>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <select className="select" value={imageModel} onChange={(e) => setImageModel(e.target.value)} style={{ flex: 1 }}>
+                      <option value="imagen-4.0-generate-001">Imagen 4</option>
+                      <option value="imagen-4.0-ultra-generate-001">Imagen 4 Ultra</option>
+                      <option value="imagen-4.0-fast-generate-001">Imagen 4 Fast</option>
+                    </select>
+                    <button 
+                      className="btn btnPrimary"
+                      onClick={handleGenerateImage}
+                      disabled={isGeneratingImage || !imagePrompt.trim()}
+                    >
+                      {isGeneratingImage ? <Loader2 size={16} className="animate-spin" /> : "Generate"}
+                    </button>
+                  </div>
                 </div>
-                <select className="select mt3" value={imageModel} onChange={(e) => setImageModel(e.target.value)}>
-                  <option value="imagen-4.0-generate-001">Imagen 4.0</option>
-                  <option value="imagen-4.0-ultra-generate-001">Imagen 4.0 Ultra</option>
-                  <option value="imagen-4.0-fast-generate-001">Imagen 4.0 Fast</option>
-                </select>
               </div>
             </div>
           ) : (
@@ -467,109 +467,85 @@ function CreateView({ onGenerate, isGenerating, generationStatus, error }) {
             </div>
           )}
         </div>
-      </div>
 
-      {/* Step 2 */}
-      <div className="formSection">
-        <div className="formSectionHeader">
-          <div className="formSectionIcon"><Film /></div>
-          <div>
-            <div className="formSectionTitle">Animation</div>
-            <div className="formSectionDesc">Describe the motion and behavior</div>
-          </div>
-        </div>
-        <div className="formSectionBody">
-          <div className="formField mb4">
-            <div className="formLabel">Animation Prompt</div>
+        {/* Animation */}
+        <div className="formGroup">
+          <div className="formGroupLabel">Animation</div>
+          <div className="formGroupContent">
             <textarea
               className="textarea"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder='e.g. "Red blood cells flowing through vessel with pulsating movement"'
+              placeholder="Describe what should happen in the animation..."
+              style={{ marginBottom: 16 }}
             />
-          </div>
-          <div className="formGrid">
-            <div className="formField">
-              <div className="formLabel">Post-processing</div>
-              <select className="select" value={postprocessMode} onChange={(e) => setPostprocessMode(e.target.value)}>
-                <option value="off">None</option>
-                <option value="captions">Captions</option>
-                <option value="voiceover">Voiceover + Captions</option>
-              </select>
-            </div>
-            <div className="formField">
-              <div className="formLabel">Model</div>
-              <select className="select" value={veoModel} onChange={(e) => setVeoModel(e.target.value)}>
-                <option value="veo-3.1-generate-preview">Veo 3.1</option>
-                <option value="veo-3.1-fast-generate-preview">Veo 3.1 Fast</option>
-              </select>
+            <div className="formGrid">
+              <div className="formField">
+                <div className="formLabel">Output</div>
+                <select className="select" value={postprocessMode} onChange={(e) => setPostprocessMode(e.target.value)}>
+                  <option value="off">Video only</option>
+                  <option value="captions">With captions</option>
+                  <option value="voiceover">With voiceover</option>
+                </select>
+              </div>
+              <div className="formField">
+                <div className="formLabel">Video Model</div>
+                <select className="select" value={veoModel} onChange={(e) => setVeoModel(e.target.value)}>
+                  <option value="veo-3.1-generate-preview">Veo 3.1</option>
+                  <option value="veo-3.1-fast-generate-preview">Veo 3.1 Fast</option>
+                </select>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      {/* Step 3 */}
-      <div className="formSection">
-        <div className="formSectionHeader">
-          <div className="formSectionIcon"><Settings2 /></div>
-          <div>
-            <div className="formSectionTitle">Settings</div>
-            <div className="formSectionDesc">Advanced options</div>
-          </div>
-        </div>
-        <div className="formSectionBody">
-          <div className="formGrid mb4">
-            <div className="formField">
-              <div className="formLabel">Prompt Enhancement</div>
-              <select className="select" value={rewriteMode} onChange={(e) => setRewriteMode(e.target.value)}>
-                <option value="gemini">Gemini 3</option>
-                <option value="rule">Rule-based</option>
-                <option value="none">None</option>
-              </select>
-            </div>
-            <div className="formField">
-              <div className="formLabel">BiomedCLIP Target</div>
-              <input
-                className="input"
-                value={target}
-                onChange={(e) => setTarget(e.target.value)}
-                placeholder='e.g. "heart"'
-                disabled={!useBiomedclip}
-              />
+        {/* Options - collapsed style */}
+        <div className="formGroup">
+          <div className="formGroupLabel">Options</div>
+          <div className="formGroupContent">
+            <div className="formGrid">
+              <div className="formField">
+                <div className="formLabel">Prompt rewrite</div>
+                <select className="select" value={rewriteMode} onChange={(e) => setRewriteMode(e.target.value)}>
+                  <option value="gemini">Gemini 3</option>
+                  <option value="rule">Rule-based</option>
+                  <option value="none">Off</option>
+                </select>
+              </div>
+              <div className="formField">
+                <label className="checkbox" style={{ marginTop: 24 }}>
+                  <input type="checkbox" checked={useBiomedclip} onChange={(e) => setUseBiomedclip(e.target.checked)} />
+                  <span>BiomedCLIP validation</span>
+                </label>
+              </div>
             </div>
           </div>
-          <label className="checkbox">
-            <input type="checkbox" checked={useBiomedclip} onChange={(e) => setUseBiomedclip(e.target.checked)} />
-            <span>Enable BiomedCLIP validation (slower)</span>
-          </label>
         </div>
-      </div>
 
-      {/* Generate */}
-      <div className="formSection">
-        <div className="formSectionBody">
-          <div className="flex itemsCenter justifyBetween">
-            <div className="textSm textTertiary">
-              {imageDataUrl ? "Ready to generate" : "Add an image first"}
-            </div>
-            <button
-              className="btn btnPrimary"
-              onClick={handleSubmit}
-              disabled={isGenerating || !prompt.trim() || !imageDataUrl}
-            >
-              {isGenerating ? <><Loader2 size={16} className="animate-spin" /> Generating...</> : <><Sparkles size={16} /> Generate</>}
-            </button>
+        {/* Submit */}
+        <div className="formActions">
+          <div className="textSm textTertiary">
+            {!imageDataUrl && "Add an image to continue"}
+            {imageDataUrl && !prompt.trim() && "Add animation description"}
+            {imageDataUrl && prompt.trim() && "Ready"}
           </div>
-
-          {generationStatus && (
-            <div className={`statusMsg mt4 ${generationStatus.status === "done" ? "success" : generationStatus.status === "error" ? "error" : "info"}`}>
-              {generationStatus.status === "done" ? <Check size={16} /> : generationStatus.status === "error" ? <AlertCircle size={16} /> : <Loader2 size={16} className="animate-spin" />}
-              {generationStatus.message}
-            </div>
-          )}
-
-          {error && <div className="statusMsg mt4 error"><AlertCircle size={16} />{error}</div>}
+          <button
+            className="btn btnPrimary"
+            onClick={handleSubmit}
+            disabled={isGenerating || !prompt.trim() || !imageDataUrl}
+          >
+            {isGenerating ? <><Loader2 size={16} className="animate-spin" /> Generating...</> : "Generate Animation"}
+          </button>
         </div>
+
+        {generationStatus && (
+          <div className={`statusMsg ${generationStatus.status === "done" ? "success" : generationStatus.status === "error" ? "error" : "info"}`}>
+            {generationStatus.status === "done" ? <Check size={16} /> : generationStatus.status === "error" ? <AlertCircle size={16} /> : <Loader2 size={16} className="animate-spin" />}
+            {generationStatus.message}
+          </div>
+        )}
+
+        {error && <div className="statusMsg error"><AlertCircle size={16} />{error}</div>}
       </div>
     </div>
   );

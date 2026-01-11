@@ -8,7 +8,7 @@ from typing import Optional
 @dataclass(frozen=True)
 class DeepgramTTSConfig:
     api_key: str
-    model: str = "aura-asteria-en"
+    model: str = "aura-2-odysseus-en"
     encoding: str = "mp3"
 
 
@@ -32,6 +32,11 @@ def synthesize_narration_with_deepgram(
     except Exception as e:
         raise RuntimeError("Missing dependency: pip install deepgram-sdk") from e
 
+    try:
+        from deepgram.core.api_error import ApiError  # type: ignore
+    except Exception:  # pragma: no cover
+        ApiError = Exception  # type: ignore
+
     client = DeepgramClient(api_key=config.api_key)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -40,11 +45,29 @@ def synthesize_narration_with_deepgram(
     except TypeError:
         # Older/newer SDK variants may not expose model/encoding kwargs.
         response = client.speak.v1.audio.generate(text=text)
-    audio = getattr(response, "stream", None)
-    if audio is None:
-        raise RuntimeError("Deepgram TTS returned no audio stream")
+    except ApiError as e:
+        raise RuntimeError(f"Deepgram TTS request failed ({getattr(e, 'status_code', '?')}): {getattr(e, 'body', e)}") from e
 
-    data = audio.getvalue()
+    # deepgram-sdk v5 returns an Iterator[bytes]; older variants may return an object with .stream.
+    data: bytes = b""
+    stream = getattr(response, "stream", None)
+    if stream is not None:
+        try:
+            data = bytes(stream.getvalue())
+        except Exception:
+            data = b""
+    elif isinstance(response, (bytes, bytearray, memoryview)):
+        data = bytes(response)
+    else:
+        try:
+            chunks = []
+            for chunk in response:
+                if isinstance(chunk, (bytes, bytearray, memoryview)):
+                    chunks.append(bytes(chunk))
+            data = b"".join(chunks)
+        except TypeError:
+            data = b""
+
     if not data:
         raise RuntimeError("Deepgram TTS returned empty audio")
 

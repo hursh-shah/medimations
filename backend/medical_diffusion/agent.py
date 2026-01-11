@@ -76,7 +76,7 @@ class GeminiPromptAdjuster(PromptAdjuster):
             if spec.input_image_path is not None
             else "No reference image is provided (text-only)."
         )
-        system = f"""You are a prompt engineer for Veo 3.1 generating short biomedical animations.
+        system = f"""You are a prompt engineer for Veo 3.1 generating short biomedical animations. You are also a physician with great medical knowledge.
 
 You will be given:
 - the original user request

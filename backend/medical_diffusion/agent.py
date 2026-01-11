@@ -40,6 +40,8 @@ class RuleBasedPromptAdjuster(PromptAdjuster):
             new_prompt = new_prompt + " " + " ".join(suggested)
         else:
             new_prompt = new_prompt + " anatomically accurate, temporally consistent, physically plausible motion"
+            if spec.input_image_path is not None:
+                new_prompt = new_prompt + "; preserve the reference image anatomy/viewpoint"
         return replace(spec, prompt=new_prompt)
 
 
@@ -69,11 +71,17 @@ class GeminiPromptAdjuster(PromptAdjuster):
         suggested = [s for s in suggested if not (s in seen or seen.add(s))]
         suggested = suggested[:12]
 
-        system = """You are a prompt engineer for Veo 3.1 generating short biomedical animations.
+        ref_constraint = (
+            "A reference image is provided as the starting frame (image-to-video); preserve its anatomy/viewpoint/style."
+            if spec.input_image_path is not None
+            else "No reference image is provided (text-only)."
+        )
+        system = f"""You are a prompt engineer for Veo 3.1 generating short biomedical animations.
 
 You will be given:
 - the original user request
 - the previous Veo prompt
+- whether an input reference image is provided
 - validator scores + feedback
 - suggested keywords to fix medical/physics issues
 
@@ -83,10 +91,12 @@ Output STRICT JSON (no markdown):
   "negative_prompt": "string"
 }
 Keep the prompt a single concise paragraph. Include: subject, action, setting, camera, style, constraints (no on-screen text/watermark).
+{ref_constraint}
 """
 
         user = f"""original_user_request: {user_prompt}
 previous_veo_prompt: {spec.prompt}
+reference_image_provided: {bool(spec.input_image_path is not None)}
 round_index: {round_index}
 medical_score: {report.medical.score:.3f}
 medical_feedback: {report.medical.feedback}

@@ -37,6 +37,7 @@ def rewrite_user_prompt_for_veo(
     user_prompt: str,
     duration_s: float,
     fps: int,
+    reference_image_provided: bool = False,
     model: str = "gemini-2.0-flash",
     gemini_config: Optional[GeminiConfig] = None,
 ) -> PromptRewriteResult:
@@ -46,7 +47,9 @@ def rewrite_user_prompt_for_veo(
 
     cfg = gemini_config or load_gemini_config(model=model)
 
+    ref = "yes (image-to-video; preserve the provided image)" if reference_image_provided else "no (text-only)"
     user = f"""User request: {user_prompt}
+Reference image provided: {ref}
 
 Video constraints:
 - duration_seconds: {duration_s:g}
@@ -54,6 +57,7 @@ Video constraints:
 
 Write the Veo prompt as a single concise paragraph.
 Include: subject, action, setting, camera framing, style, constraints (no text/watermark).
+If a reference image is provided, assume it is the first frame and do not contradict its anatomy/view.
 """
 
     data = generate_json(system=_SYSTEM, user=user, config=cfg)
@@ -67,4 +71,3 @@ Include: subject, action, setting, camera framing, style, constraints (no text/w
         target_label=get_optional_str(data, "target_label"),
         notes=get_optional_str(data, "notes"),
     )
-

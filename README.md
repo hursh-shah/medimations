@@ -2,7 +2,7 @@
 
 This repo contains:
 - `backend/`: Python generation + agent loop (Veo 3.1), BiomedCLIP verifier, and an API server.
-- `frontend/`: Vercel-ready Next.js UI that calls the backend and displays the generated video.
+- `frontend/`: Vercel-ready Next.js UI for **image + text → video** (upload/generate an image, then animate it).
 
 ### Local dev
 

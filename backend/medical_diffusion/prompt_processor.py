@@ -64,6 +64,11 @@ class PromptProcessor:
             "Style: clinical textbook CGI, clean lighting, neutral background, high detail. "
             "Constraints: no on-screen text, no labels, no watermark."
         )
+        if spec.input_image_path is not None:
+            prompt = (
+                prompt
+                + " Use the provided reference medical image as the first frame; preserve its anatomy, viewpoint, and style, and only animate realistic motion consistent with the reference."
+            )
 
         negative = spec.negative_prompt
         if not negative:
@@ -91,6 +96,7 @@ class PromptProcessor:
                 user_prompt=base,
                 duration_s=spec.duration_s,
                 fps=spec.fps,
+                reference_image_provided=spec.input_image_path is not None,
                 model=model,
             )
         except Exception as e:

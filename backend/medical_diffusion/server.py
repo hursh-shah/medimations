@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
 import datetime as _dt
+import io
 import json
 import os
+import re
 import threading
 import uuid
 from dataclasses import asdict, dataclass, field, fields
@@ -43,6 +46,7 @@ class JobState:
     gemini_model: str = "gemini-2.0-flash"
     biomedclip_target: Optional[str] = None
     use_biomedclip: bool = True
+    input_image_provided: bool = False
 
     accepted: Optional[bool] = None
     report_summary: Optional[str] = None
@@ -59,6 +63,10 @@ _job_fields = {f.name for f in fields(JobState)}
 class GenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=1, description="User prompt, e.g. 'heart surgery video'")
     backend: Literal["veo", "demo"] = "veo"
+    input_image: Optional[str] = Field(
+        default=None,
+        description="Optional reference image for image+text→video (data URL or base64)",
+    )
 
     prompt_rewrite: Literal["gemini", "rule", "none"] = "gemini"
     gemini_model: str = "gemini-2.0-flash"
@@ -87,6 +95,19 @@ class GenerateRequest(BaseModel):
 class GenerateResponse(BaseModel):
     job_id: str
     status_url: str
+
+
+class GenerateImageRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, description="Prompt for a medical image, e.g. 'axial CT slice of liver'")
+    model: str = Field(default="imagen-3.0-generate-001", description="Image model id (google-genai)")
+    aspect_ratio: str = Field(default="1:1", description="Aspect ratio, e.g. 1:1 or 3:4")
+    negative_prompt: Optional[str] = Field(default=None, description="Optional negative prompt")
+
+
+class GenerateImageResponse(BaseModel):
+    image_data_url: str
+    mime_type: str
+    model: str
 
 
 class JobResponse(BaseModel):
@@ -133,6 +154,7 @@ def generate(req: GenerateRequest) -> GenerateResponse:
         gemini_model=req.gemini_model,
         biomedclip_target=req.biomedclip_target,
         use_biomedclip=bool(req.use_biomedclip),
+        input_image_provided=bool(req.input_image),
     )
     with _jobs_lock:
         _jobs[job_id] = job
@@ -142,6 +164,49 @@ def generate(req: GenerateRequest) -> GenerateResponse:
     thread.start()
 
     return GenerateResponse(job_id=job_id, status_url=f"/api/jobs/{job_id}")
+
+
+@app.post("/api/images/generate", response_model=GenerateImageResponse)
+def generate_image(req: GenerateImageRequest) -> GenerateImageResponse:
+    try:
+        from google import genai
+        from google.genai import types
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="google-genai is required for image generation") from e
+
+    api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="GOOGLE_API_KEY is not set (required for image generation)")
+
+    client = genai.Client(api_key=api_key)
+    resp = client.models.generate_images(
+        model=req.model,
+        prompt=req.prompt,
+        config=types.GenerateImagesConfig(
+            negative_prompt=req.negative_prompt or None,
+            number_of_images=1,
+            aspect_ratio=req.aspect_ratio,
+            add_watermark=False,
+            output_mime_type="image/png",
+        ),
+    )
+
+    generated = (getattr(resp, "generated_images", None) or [])[:1]
+    if not generated:
+        raise HTTPException(status_code=500, detail="Image model returned no images")
+
+    image = getattr(generated[0], "image", None)
+    image_bytes = getattr(image, "image_bytes", None)
+    mime_type = (getattr(image, "mime_type", None) or "image/png").strip()
+    if not image_bytes:
+        raise HTTPException(status_code=500, detail="Image model returned empty image bytes")
+
+    b64 = base64.b64encode(image_bytes).decode("ascii")
+    return GenerateImageResponse(
+        image_data_url=f"data:{mime_type};base64,{b64}",
+        mime_type=mime_type,
+        model=req.model,
+    )
 
 
 @app.get("/api/jobs/{job_id}", response_model=JobResponse)
@@ -199,10 +264,17 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
     try:
         JOBS_DIR.mkdir(parents=True, exist_ok=True)
         LIBRARY_DIR.mkdir(parents=True, exist_ok=True)
+        run_root = JOBS_DIR / job_id
+        run_root.mkdir(parents=True, exist_ok=True)
 
         processor = PromptProcessor()
         spec = processor.parse(req.prompt)
         spec = _apply_overrides(spec, req)
+        if req.input_image:
+            image_path = _save_input_image(data=req.input_image, output_path=run_root / "input_image.png")
+            from dataclasses import replace
+
+            spec = replace(spec, input_image_path=image_path)
 
         if req.backend == "veo":
             if req.prompt_rewrite == "none":
@@ -235,7 +307,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
                 physics_threshold=float(req.physics_threshold),
             ),
             prompt_adjuster=prompt_adjuster,
-            run_root=JOBS_DIR / job_id,
+            run_root=run_root,
         )
 
         result: AgentResult = agent.run(spec=spec)
@@ -321,6 +393,47 @@ def _make_backend(req: GenerateRequest):
     if req.backend == "demo":
         return DemoBackend()
     raise ValueError(f"Unsupported backend: {req.backend}")
+
+
+_DATA_URL_RE = re.compile(r"^data:(?P<mime>[-\\w.+/]+)?;base64,(?P<b64>.*)$", re.DOTALL)
+
+
+def _save_input_image(*, data: str, output_path: Path) -> Path:
+    """
+    Accepts either:
+    - data URL: data:image/png;base64,....
+    - raw base64: iVBORw0KGgo....
+
+    Writes a normalized PNG to `output_path` (suffix forced to .png).
+    """
+    raw = (data or "").strip()
+    if not raw:
+        raise ValueError("input_image is empty")
+
+    mime_type = None
+    b64 = raw
+    m = _DATA_URL_RE.match(raw)
+    if m:
+        mime_type = (m.group("mime") or "").strip() or None
+        b64 = m.group("b64") or ""
+
+    try:
+        decoded = base64.b64decode(re.sub(r"\\s+", "", b64), validate=False)
+    except Exception as e:
+        raise ValueError("input_image is not valid base64") from e
+
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(decoded))
+        img = img.convert("RGB")
+        output_path = output_path.with_suffix(".png")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(output_path, format="PNG")
+        return output_path
+    except Exception as e:
+        hint = f" ({mime_type})" if mime_type else ""
+        raise ValueError(f"input_image could not be decoded as an image{hint}") from e
 
 
 def _validate_job_id(job_id: str) -> None:

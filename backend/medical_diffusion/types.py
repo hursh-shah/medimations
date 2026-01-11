@@ -12,6 +12,7 @@ class AnimationSpec:
     fps: int = 8
     width: int = 128
     height: int = 128
+    input_image_path: Optional[Path] = None
     seed: Optional[int] = None
     negative_prompt: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)

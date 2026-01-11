@@ -85,7 +85,8 @@ uvicorn medical_diffusion.server:app --reload --port 8000
 ```
 
 API endpoints:
-- `POST /api/generate` → returns `{job_id, status_url}`
+- `POST /api/images/generate` → returns `{image_data_url, ...}` (optional helper for AI image generation)
+- `POST /api/generate` → returns `{job_id, status_url}` (supports optional `input_image` for image+text → video)
 - `GET /api/jobs/{job_id}` → status + results
 - `GET /api/videos/{job_id}.mp4` → final video
 - `GET /api/library` → saved videos

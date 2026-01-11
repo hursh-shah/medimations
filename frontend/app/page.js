@@ -32,6 +32,10 @@ async function apiFetch(path, init) {
 }
 
 export default function Home() {
+  const [imageDataUrl, setImageDataUrl] = useState("");
+  const [imagePrompt, setImagePrompt] = useState("");
+  const [imageModel, setImageModel] = useState("imagen-3.0-generate-001");
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [target, setTarget] = useState("");
   const [rewriteMode, setRewriteMode] = useState("gemini");
@@ -88,6 +92,10 @@ export default function Home() {
       setError("Enter a prompt.");
       return;
     }
+    if (!imageDataUrl) {
+      setError("Select or generate a medical image first.");
+      return;
+    }
 
     try {
       const resp = await apiFetch("/api/generate", {
@@ -96,6 +104,7 @@ export default function Home() {
         body: JSON.stringify({
           prompt,
           backend: "veo",
+          input_image: imageDataUrl,
           prompt_rewrite: rewriteMode,
           gemini_model: "gemini-2.0-flash",
           veo_model: veoModel,
@@ -123,6 +132,7 @@ export default function Home() {
         body: JSON.stringify({
           prompt: prompt.trim() ? prompt.trim() : "demo: falling red dot",
           backend: "demo",
+          input_image: imageDataUrl || null,
           prompt_rewrite: "none",
           use_biomedclip: false,
           max_rounds: 1,
@@ -143,6 +153,56 @@ export default function Home() {
     }
   }
 
+  async function readFileAsDataUrl(file) {
+    const maxBytes = 8 * 1024 * 1024;
+    if (file.size > maxBytes) {
+      throw new Error("Image is too large (max 8MB).");
+    }
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Failed to read image."));
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  async function onUploadImage(e) {
+    const file = e?.target?.files?.[0];
+    if (!file) return;
+    setError("");
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      setImageDataUrl(dataUrl);
+    } catch (err) {
+      setError(String(err?.message || err));
+    }
+  }
+
+  async function onGenerateImage() {
+    setError("");
+    if (!imagePrompt.trim()) {
+      setError("Enter an image prompt.");
+      return;
+    }
+    setIsGeneratingImage(true);
+    try {
+      const resp = await apiFetch("/api/images/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: imagePrompt,
+          model: imageModel,
+          aspect_ratio: "1:1"
+        })
+      });
+      setImageDataUrl(resp.image_data_url || "");
+    } catch (e) {
+      setError(String(e?.message || e));
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  }
+
   useEffect(() => {
     refreshLibrary();
     return () => {
@@ -155,7 +215,7 @@ export default function Home() {
       <header className="header">
         <div>
           <h1>Medical Diffusion</h1>
-          <p className="muted">Veo 3.1 generation + BiomedCLIP verification + up to 1 reprompt.</p>
+          <p className="muted">Image + text → Veo 3.1 generation + BiomedCLIP verification + up to 1 reprompt.</p>
         </div>
         <a className="link" href="https://vercel.com" target="_blank" rel="noreferrer">
           Deploy on Vercel
@@ -166,11 +226,50 @@ export default function Home() {
         <h2>Generate</h2>
         <div className="grid2">
           <label className="field">
-            <span>Prompt</span>
+            <span>Upload a medical image (PNG/JPG)</span>
+            <input type="file" accept="image/*" onChange={onUploadImage} />
+          </label>
+          <label className="field">
+            <span>Or generate one with AI</span>
+            <div className="row" style={{ marginTop: 0 }}>
+              <input
+                value={imagePrompt}
+                onChange={(e) => setImagePrompt(e.target.value)}
+                placeholder='e.g. "axial CT slice of the liver, clinical, grayscale, no text"'
+              />
+              <button className="btnSecondary" onClick={onGenerateImage} disabled={isGeneratingImage}>
+                {isGeneratingImage ? "Generating…" : "Generate image"}
+              </button>
+            </div>
+            <div className="row" style={{ marginTop: 8 }}>
+              <select value={imageModel} onChange={(e) => setImageModel(e.target.value)}>
+                <option value="imagen-3.0-generate-001">imagen-3.0-generate-001</option>
+                <option value="imagen-3.0-fast-generate-001">imagen-3.0-fast-generate-001</option>
+              </select>
+              {imageDataUrl ? (
+                <button className="btnSecondary" onClick={() => setImageDataUrl("")}>
+                  Clear image
+                </button>
+              ) : null}
+            </div>
+          </label>
+        </div>
+
+        <div className="imageRow">
+          {imageDataUrl ? (
+            <img className="imagePreview" src={imageDataUrl} alt="Selected medical image" />
+          ) : (
+            <div className="imagePlaceholder muted">No image selected yet.</div>
+          )}
+        </div>
+
+        <div className="grid2">
+          <label className="field">
+            <span>Animation prompt (what should happen over time)</span>
             <input
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder='e.g. "heart surgery video" or "red blood cells moving through a capillary"'
+              placeholder='e.g. "animate red blood cells flowing through the vessel"'
             />
           </label>
           <label className="field">

@@ -49,9 +49,28 @@ class VeoGenaiBackend:
         if not api_key:
             raise RuntimeError("GOOGLE_API_KEY is not set (required for --backend veo)")
         client = genai.Client(api_key=api_key)
+
+        image = None
+        if spec.input_image_path is not None:
+            image_path = Path(spec.input_image_path)
+            if not image_path.exists():
+                raise RuntimeError(f"Input image not found: {image_path}")
+            if hasattr(types.Image, "from_file"):
+                image = types.Image.from_file(location=str(image_path))
+            else:
+                # Fallback for older google-genai versions.
+                mime_type = "image/png"
+                ext = image_path.suffix.lower().lstrip(".")
+                if ext in {"jpg", "jpeg"}:
+                    mime_type = "image/jpeg"
+                elif ext == "webp":
+                    mime_type = "image/webp"
+                image = types.Image(image_bytes=image_path.read_bytes(), mime_type=mime_type)
+
         operation = client.models.generate_videos(
             model=self.model,
             prompt=spec.prompt,
+            image=image,
             config=types.GenerateVideosConfig(
                 negative_prompt=spec.negative_prompt or None,
                 aspect_ratio=self.aspect_ratio,
@@ -90,5 +109,9 @@ class VeoGenaiBackend:
             frames=frames,
             frames_dir=frames_dir,
             backend=self.name,
-            metadata={"video_path": str(video_path), "model": self.model},
+            metadata={
+                "video_path": str(video_path),
+                "model": self.model,
+                "input_image_path": str(spec.input_image_path) if spec.input_image_path is not None else None,
+            },
         )

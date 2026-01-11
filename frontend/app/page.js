@@ -446,7 +446,7 @@ function CreateView({
   const [target, setTarget] = useState("");
   const [rewriteMode, setRewriteMode] = useState("gemini");
   const [veoModel, setVeoModel] = useState("veo-3.1-generate-preview");
-  const [useBiomedclip, setUseBiomedclip] = useState(true);
+  const [useBiomedclip, setUseBiomedclip] = useState(false);
   const [postprocessMode, setPostprocessMode] = useState("voiceover");
 
   async function readFileAsDataUrl(file) {
@@ -739,7 +739,7 @@ function CreateView({
                 checked={useBiomedclip}
                 onChange={(e) => setUseBiomedclip(e.target.checked)}
               />
-              <span>Enable BiomedCLIP validation for medical accuracy</span>
+              <span>Enable BiomedCLIP validation (slower, loads ML model)</span>
             </label>
           </div>
         </div>

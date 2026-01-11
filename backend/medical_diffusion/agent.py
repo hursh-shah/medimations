@@ -28,8 +28,10 @@ class PromptAdjuster:
 class RuleBasedPromptAdjuster(PromptAdjuster):
     def adjust(self, *, spec: AnimationSpec, report: ValidationReport, round_index: int) -> AnimationSpec:
         suggested = []
-        suggested.extend(report.medical.details.get("suggested_keywords", []))
-        suggested.extend(report.physics.details.get("suggested_keywords", []))
+        if isinstance(report.medical.details, dict):
+            suggested.extend(report.medical.details.get("suggested_keywords", []) or [])
+        if isinstance(report.physics.details, dict):
+            suggested.extend(report.physics.details.get("suggested_keywords", []) or [])
         suggested = [str(s).strip() for s in suggested if str(s).strip()]
         # De-dupe while preserving order.
         seen = set()
@@ -364,8 +366,10 @@ class SmartValidatorAgent:
         for round_index in range(self._config.max_rounds):
             best_round: Optional[AgentRound] = None
             best_score = float("-inf")
+            last_candidate_index = 0  # Track for edit rounds; default handles candidates_per_round=0
 
             for candidate_index in range(self._config.candidates_per_round):
+                last_candidate_index = candidate_index
                 seed = (
                     current_spec.seed
                     if current_spec.seed is not None
@@ -461,7 +465,7 @@ class SmartValidatorAgent:
                         edit_round = AgentRound(
                             round_index=round_index,
                             prompt=f"[EDIT:{correction_plan.edits[0].action.value}] {correction_plan.edits[0].target_object}",
-                            candidate_index=candidate_index + 1,
+                            candidate_index=last_candidate_index + 1 + edit_attempts_this_round,
                             generation=edited_generation,
                             report=edit_report,
                         )

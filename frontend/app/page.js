@@ -24,13 +24,6 @@ import {
   Loader2,
   Captions,
   Mic,
-  ArrowRight,
-  ChevronRight,
-  Clock,
-  Maximize2,
-  MoreHorizontal,
-  Trash2,
-  Share,
   Zap
 } from "lucide-react";
 
@@ -78,7 +71,7 @@ async function apiFetchText(urlOrPath) {
   return res.text();
 }
 
-function clampIso(iso) {
+function formatDate(iso) {
   const s = String(iso || "").trim();
   if (!s) return "";
   const d = new Date(s);
@@ -86,9 +79,7 @@ function clampIso(iso) {
 }
 
 function parseSrtTimestamp(ts) {
-  const m = String(ts || "")
-    .trim()
-    .match(/^(\d+):(\d+):(\d+)[,.](\d+)$/);
+  const m = String(ts || "").trim().match(/^(\d+):(\d+):(\d+)[,.](\d+)$/);
   if (!m) return 0;
   const [, hh, mm, ss, ms] = m;
   return Number(hh) * 3600 + Number(mm) * 60 + Number(ss) + Number(ms) / 1000;
@@ -115,7 +106,7 @@ function parseSrt(srtText) {
 }
 
 // ============================================
-// VIDEO CARD COMPONENT
+// VIDEO CARD
 // ============================================
 
 function VideoCard({ item, onClick, onPostprocess, onRemoveCaptions, postprocessStatus }) {
@@ -150,49 +141,28 @@ function VideoCard({ item, onClick, onPostprocess, onRemoveCaptions, postprocess
   return (
     <motion.div
       className="videoCard"
-      initial={{ opacity: 0, y: 20 }}
+      initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
+      transition={{ duration: 0.25 }}
       onMouseEnter={() => setIsHovering(true)}
       onMouseLeave={() => setIsHovering(false)}
       onClick={onClick}
     >
-      <div className="videoCardThumbnail">
-        <video
-          ref={videoRef}
-          src={src}
-          muted
-          loop
-          playsInline
-          preload="metadata"
-        />
+      <div className="videoCardThumb">
+        <video ref={videoRef} src={src} muted loop playsInline preload="metadata" />
         <div className="videoCardOverlay">
-          <div className="playButton">
-            <Play />
-          </div>
+          <div className="playBtn"><Play /></div>
         </div>
-        
         <div className="videoCardBadges">
-          {hasVoiceover && (
-            <span className="badge badgeVoiceover">Voiceover</span>
-          )}
-          {hasCaptions && !hasVoiceover && (
-            <span className="badge badgeCaptions">CC</span>
-          )}
-          {isExtension && (
-            <span className="badge badgeExtended">Extended</span>
-          )}
+          {hasVoiceover && <span className="badge badgeVo">VO</span>}
+          {hasCaptions && !hasVoiceover && <span className="badge badgeCc">CC</span>}
+          {isExtension && <span className="badge badgeExt">EXT</span>}
         </div>
       </div>
       
       <div className="videoCardInfo">
-        <div className="videoCardTitle">
-          {item.prompt || item.job_id.slice(0, 8)}
-        </div>
-        <div className="videoCardMeta">
-          {clampIso(item.created_at)}
-          {item.report_summary ? ` • ${item.report_summary}` : ""}
-        </div>
+        <div className="videoCardTitle">{item.prompt || item.job_id.slice(0, 8)}</div>
+        <div className="videoCardMeta">{formatDate(item.created_at)}</div>
       </div>
       
       <div className="videoCardActions" onClick={(e) => e.stopPropagation()}>
@@ -202,11 +172,10 @@ function VideoCard({ item, onClick, onPostprocess, onRemoveCaptions, postprocess
           onClick={() => hasCaptions ? onRemoveCaptions(item.job_id) : onPostprocess(item.job_id, "captions")}
         >
           {busy && (postprocessStatus?.mode === "captions" || postprocessStatus?.mode === "captions_remove") ? (
-            <Loader2 className="animate-pulse" size={14} />
+            <Loader2 className="animate-spin" size={14} />
           ) : (
             <Captions size={14} />
           )}
-          {hasCaptions ? "Remove CC" : "Add CC"}
         </button>
         <button
           className="btn btnSecondary btnSm"
@@ -214,11 +183,10 @@ function VideoCard({ item, onClick, onPostprocess, onRemoveCaptions, postprocess
           onClick={() => onPostprocess(item.job_id, "voiceover")}
         >
           {busy && postprocessStatus?.mode === "voiceover" ? (
-            <Loader2 className="animate-pulse" size={14} />
+            <Loader2 className="animate-spin" size={14} />
           ) : (
             <Mic size={14} />
           )}
-          {hasVoiceover ? "VO Added" : "Add VO"}
         </button>
         <a
           className="btn btnSecondary btnSm"
@@ -253,13 +221,10 @@ function VideoPlayerModal({ item, isOpen, onClose, muted, onToggleMute, onExtend
     if (!isOpen) return;
     captionsRef.current = null;
     setCaption("");
-    
     if (hasCaptions) {
-      apiFetchText(item.captions_srt_url)
-        .then((txt) => {
-          captionsRef.current = parseSrt(txt);
-        })
-        .catch(() => {});
+      apiFetchText(item.captions_srt_url).then((txt) => {
+        captionsRef.current = parseSrt(txt);
+      }).catch(() => {});
     }
   }, [isOpen, hasCaptions, item?.captions_srt_url]);
 
@@ -273,13 +238,8 @@ function VideoPlayerModal({ item, isOpen, onClose, muted, onToggleMute, onExtend
   function togglePlay() {
     const v = videoRef.current;
     if (!v) return;
-    if (v.paused) {
-      v.play().catch(() => {});
-      setIsPlaying(true);
-    } else {
-      v.pause();
-      setIsPlaying(false);
-    }
+    if (v.paused) { v.play().catch(() => {}); setIsPlaying(true); }
+    else { v.pause(); setIsPlaying(false); }
   }
 
   function onTimeUpdate() {
@@ -306,66 +266,37 @@ function VideoPlayerModal({ item, isOpen, onClose, muted, onToggleMute, onExtend
     <div className="modalOverlay" onClick={onClose}>
       <motion.div
         className="modal"
-        initial={{ opacity: 0, scale: 0.95, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 20 }}
+        initial={{ opacity: 0, scale: 0.97 }}
+        animate={{ opacity: 1, scale: 1 }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modalHeader">
           <div className="modalTitle">{item.prompt || "Animation"}</div>
-          <button className="btn btnGhost btnIcon" onClick={onClose}>
-            <X size={20} />
-          </button>
+          <button className="btn btnGhost btnIcon" onClick={onClose}><X size={18} /></button>
         </div>
         
         <div className="modalBody">
           <div className="playerContainer" onClick={togglePlay}>
-            <video
-              ref={videoRef}
-              src={src}
-              loop
-              playsInline
-              muted={muted}
-              onTimeUpdate={onTimeUpdate}
-            />
-            {caption && <div className="captionOverlay">{caption}</div>}
+            <video ref={videoRef} src={src} loop playsInline muted={muted} onTimeUpdate={onTimeUpdate} />
+            {caption && <div className="playerCaption">{caption}</div>}
           </div>
           
-          <div className="playerDetails">
-            <div className="flex itemsCenter justifyBetween">
-              <div>
-                <div className="videoCardMeta">
-                  {clampIso(item.created_at)}
-                  {item.report_summary ? ` • ${item.report_summary}` : ""}
-                </div>
-              </div>
-              <div className="flex gap2">
-                <button className="btn btnSecondary btnSm" onClick={togglePlay}>
-                  {isPlaying ? <Pause size={16} /> : <Play size={16} />}
-                  {isPlaying ? "Pause" : "Play"}
-                </button>
-                <button className="btn btnSecondary btnSm" onClick={onToggleMute}>
-                  {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
-                  {muted ? "Unmute" : "Mute"}
-                </button>
-                <button
-                  className="btn btnPrimary btnSm"
-                  disabled={extending}
-                  onClick={() => onExtend(item.job_id)}
-                >
-                  {extending ? <Loader2 size={16} className="animate-pulse" /> : <Zap size={16} />}
-                  Extend
-                </button>
-                <a
-                  className="btn btnSecondary btnSm"
-                  href={downloadUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  <Download size={16} />
-                  Download
-                </a>
-              </div>
+          <div className="playerInfo">
+            <div className="playerMeta">{formatDate(item.created_at)}</div>
+            <div className="playerActions">
+              <button className="btn btnSecondary btnSm" onClick={togglePlay}>
+                {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+              </button>
+              <button className="btn btnSecondary btnSm" onClick={onToggleMute}>
+                {muted ? <VolumeX size={14} /> : <Volume2 size={14} />}
+              </button>
+              <button className="btn btnPrimary btnSm" disabled={extending} onClick={() => onExtend(item.job_id)}>
+                {extending ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
+                Extend
+              </button>
+              <a className="btn btnSecondary btnSm" href={downloadUrl} target="_blank" rel="noreferrer">
+                <Download size={14} />
+              </a>
             </div>
           </div>
         </div>
@@ -378,29 +309,15 @@ function VideoPlayerModal({ item, isOpen, onClose, muted, onToggleMute, onExtend
 // LIBRARY VIEW
 // ============================================
 
-function LibraryView({ 
-  library, 
-  onRefresh, 
-  onOpenPlayer,
-  onPostprocess,
-  onRemoveCaptions,
-  postprocessById,
-  onCreateNew
-}) {
+function LibraryView({ library, onOpenPlayer, onPostprocess, onRemoveCaptions, postprocessById, onCreateNew }) {
   if (library.length === 0) {
     return (
       <div className="emptyState animate-fadeIn">
-        <div className="emptyIcon">
-          <Film />
-        </div>
-        <div className="emptyTitle">Your library is empty</div>
-        <div className="emptyDescription">
-          Create your first medical animation to see it here. 
-          Generate stunning AI-powered visualizations in seconds.
-        </div>
+        <div className="emptyIcon"><Film /></div>
+        <div className="emptyTitle">No animations yet</div>
+        <div className="emptyDesc">Create your first medical animation to get started.</div>
         <button className="btn btnPrimary" onClick={onCreateNew}>
-          <Plus size={18} />
-          Create Animation
+          <Plus size={16} /> Create
         </button>
       </div>
     );
@@ -428,19 +345,11 @@ function LibraryView({
 // CREATE VIEW
 // ============================================
 
-function CreateView({ 
-  onBack,
-  onGenerate,
-  isGenerating,
-  generationStatus,
-  error
-}) {
+function CreateView({ onGenerate, isGenerating, generationStatus, error }) {
   const [imageDataUrl, setImageDataUrl] = useState("");
   const [imagePrompt, setImagePrompt] = useState("");
   const [imageModel, setImageModel] = useState("imagen-4.0-generate-001");
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
-  const [isCheckingImage, setIsCheckingImage] = useState(false);
-  const [imageValidation, setImageValidation] = useState(null);
   
   const [prompt, setPrompt] = useState("");
   const [target, setTarget] = useState("");
@@ -451,9 +360,7 @@ function CreateView({
 
   async function readFileAsDataUrl(file) {
     const maxBytes = 8 * 1024 * 1024;
-    if (file.size > maxBytes) {
-      throw new Error("Image is too large (max 8MB).");
-    }
+    if (file.size > maxBytes) throw new Error("Image is too large (max 8MB).");
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onerror = () => reject(new Error("Failed to read image."));
@@ -468,7 +375,6 @@ function CreateView({
     try {
       const dataUrl = await readFileAsDataUrl(file);
       setImageDataUrl(dataUrl);
-      setImageValidation(null);
     } catch (err) {
       console.error(err);
     }
@@ -477,7 +383,6 @@ function CreateView({
   async function handleGenerateImage() {
     if (!imagePrompt.trim()) return;
     setIsGeneratingImage(true);
-    setImageValidation(null);
     try {
       const resp = await apiFetchJson("/api/images/generate", {
         method: "POST",
@@ -494,7 +399,6 @@ function CreateView({
         })
       });
       setImageDataUrl(resp.image_data_url || "");
-      setImageValidation(resp || null);
     } catch (e) {
       console.error(e);
     } finally {
@@ -502,226 +406,129 @@ function CreateView({
     }
   }
 
-  async function handleValidateImage() {
-    if (!imageDataUrl) return;
-    setIsCheckingImage(true);
-    try {
-      const resp = await apiFetchJson("/api/images/validate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          input_image: imageDataUrl,
-          prompt: imagePrompt.trim() ? imagePrompt.trim() : null,
-          biomedclip_target: useBiomedclip && target.trim() ? target.trim() : null,
-          biomedclip_threshold: 0.85
-        })
-      });
-      setImageValidation(resp || null);
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setIsCheckingImage(false);
-    }
-  }
-
   function handleSubmit() {
     if (!prompt.trim() || !imageDataUrl) return;
-    onGenerate({
-      prompt,
-      imageDataUrl,
-      rewriteMode,
-      veoModel,
-      postprocessMode,
-      useBiomedclip,
-      target
-    });
+    onGenerate({ prompt, imageDataUrl, rewriteMode, veoModel, postprocessMode, useBiomedclip, target });
   }
 
   return (
     <div className="createContainer animate-slideUp">
-      <div className="createCard">
-        {/* Step 1: Image */}
-        <div className="createSection">
-          <div className="sectionHeader">
-            <div className="sectionIcon">
-              <ImageIcon />
-            </div>
-            <div>
-              <div className="sectionTitle">Medical Image</div>
-              <div className="sectionDescription">Upload or generate a base image for your animation</div>
-            </div>
+      {/* Step 1 */}
+      <div className="formSection">
+        <div className="formSectionHeader">
+          <div className="formSectionIcon"><ImageIcon /></div>
+          <div>
+            <div className="formSectionTitle">Medical Image</div>
+            <div className="formSectionDesc">Upload or generate a base image</div>
           </div>
-
+        </div>
+        <div className="formSectionBody">
           {!imageDataUrl ? (
             <div className="formGrid">
               <label className="uploadZone">
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handleUploadImage}
-                  style={{ display: "none" }}
-                />
-                <div className="uploadIcon">
-                  <Upload />
-                </div>
-                <div className="uploadText">Upload Medical Image</div>
+                <input type="file" accept="image/*" onChange={handleUploadImage} style={{ display: "none" }} />
+                <div className="uploadIcon"><Upload /></div>
+                <div className="uploadText">Upload Image</div>
                 <div className="uploadHint">PNG, JPG up to 8MB</div>
               </label>
               
               <div className="formField">
-                <div className="formLabel">Or generate with AI</div>
+                <div className="formLabel">Generate with AI</div>
                 <div className="inlineRow">
                   <input
                     className="input"
                     value={imagePrompt}
                     onChange={(e) => setImagePrompt(e.target.value)}
-                    placeholder='e.g. "axial CT slice of the liver"'
+                    placeholder='e.g. "CT scan of liver"'
                   />
                   <button 
                     className="btn btnPrimary btnSm"
                     onClick={handleGenerateImage}
                     disabled={isGeneratingImage || !imagePrompt.trim()}
                   >
-                    {isGeneratingImage ? (
-                      <Loader2 size={16} className="animate-pulse" />
-                    ) : (
-                      <Wand2 size={16} />
-                    )}
-                    Generate
+                    {isGeneratingImage ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
                   </button>
                 </div>
-                <div className="mt2">
-                  <select
-                    className="select"
-                    value={imageModel}
-                    onChange={(e) => setImageModel(e.target.value)}
-                  >
-                    <option value="imagen-4.0-generate-001">Imagen 4.0</option>
-                    <option value="imagen-4.0-ultra-generate-001">Imagen 4.0 Ultra</option>
-                    <option value="imagen-4.0-fast-generate-001">Imagen 4.0 Fast</option>
-                  </select>
-                </div>
+                <select className="select mt3" value={imageModel} onChange={(e) => setImageModel(e.target.value)}>
+                  <option value="imagen-4.0-generate-001">Imagen 4.0</option>
+                  <option value="imagen-4.0-ultra-generate-001">Imagen 4.0 Ultra</option>
+                  <option value="imagen-4.0-fast-generate-001">Imagen 4.0 Fast</option>
+                </select>
               </div>
             </div>
           ) : (
-            <div>
-              <div className="imagePreview">
-                <img src={imageDataUrl} alt="Selected medical" />
-                <div className="imagePreviewActions">
-                  <button
-                    className="btn btnSecondary btnSm"
-                    onClick={() => {
-                      setImageDataUrl("");
-                      setImageValidation(null);
-                    }}
-                  >
-                    <X size={14} />
-                    Remove
-                  </button>
-                </div>
+            <div className="imagePreview">
+              <img src={imageDataUrl} alt="Medical" />
+              <div className="imagePreviewOverlay">
+                <button className="btn btnSecondary btnSm" onClick={() => setImageDataUrl("")}>
+                  <X size={14} /> Remove
+                </button>
               </div>
-              
-              {useBiomedclip && (
-                <div className="mt3 flex itemsCenter gap3">
-                  <button
-                    className="btn btnSecondary btnSm"
-                    onClick={handleValidateImage}
-                    disabled={isCheckingImage}
-                  >
-                    {isCheckingImage ? (
-                      <Loader2 size={14} className="animate-pulse" />
-                    ) : (
-                      <Check size={14} />
-                    )}
-                    Validate Image
-                  </button>
-                  {imageValidation?.report_summary && (
-                    <span className="textSm textSecondary">
-                      {imageValidation.report_summary}
-                    </span>
-                  )}
-                </div>
-              )}
             </div>
           )}
         </div>
+      </div>
 
-        {/* Step 2: Animation */}
-        <div className="createSection">
-          <div className="sectionHeader">
-            <div className="sectionIcon">
-              <Film />
-            </div>
-            <div>
-              <div className="sectionTitle">Animation Details</div>
-              <div className="sectionDescription">Describe what you want to animate</div>
-            </div>
+      {/* Step 2 */}
+      <div className="formSection">
+        <div className="formSectionHeader">
+          <div className="formSectionIcon"><Film /></div>
+          <div>
+            <div className="formSectionTitle">Animation</div>
+            <div className="formSectionDesc">Describe the motion and behavior</div>
           </div>
-
-          <div className="formField mb3">
+        </div>
+        <div className="formSectionBody">
+          <div className="formField mb4">
             <div className="formLabel">Animation Prompt</div>
             <textarea
               className="textarea"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder='e.g. "Animate red blood cells flowing through the vessel, showing pulsating movement with each heartbeat"'
+              placeholder='e.g. "Red blood cells flowing through vessel with pulsating movement"'
             />
           </div>
-
           <div className="formGrid">
             <div className="formField">
               <div className="formLabel">Post-processing</div>
-              <select 
-                className="select"
-                value={postprocessMode}
-                onChange={(e) => setPostprocessMode(e.target.value)}
-              >
+              <select className="select" value={postprocessMode} onChange={(e) => setPostprocessMode(e.target.value)}>
                 <option value="off">None</option>
-                <option value="captions">Captions Only</option>
+                <option value="captions">Captions</option>
                 <option value="voiceover">Voiceover + Captions</option>
               </select>
             </div>
             <div className="formField">
-              <div className="formLabel">Veo Model</div>
-              <select
-                className="select"
-                value={veoModel}
-                onChange={(e) => setVeoModel(e.target.value)}
-              >
+              <div className="formLabel">Model</div>
+              <select className="select" value={veoModel} onChange={(e) => setVeoModel(e.target.value)}>
                 <option value="veo-3.1-generate-preview">Veo 3.1</option>
                 <option value="veo-3.1-fast-generate-preview">Veo 3.1 Fast</option>
               </select>
             </div>
           </div>
         </div>
+      </div>
 
-        {/* Step 3: Settings */}
-        <div className="createSection">
-          <div className="sectionHeader">
-            <div className="sectionIcon">
-              <Settings2 />
-            </div>
-            <div>
-              <div className="sectionTitle">Advanced Settings</div>
-              <div className="sectionDescription">Fine-tune generation parameters</div>
-            </div>
+      {/* Step 3 */}
+      <div className="formSection">
+        <div className="formSectionHeader">
+          <div className="formSectionIcon"><Settings2 /></div>
+          <div>
+            <div className="formSectionTitle">Settings</div>
+            <div className="formSectionDesc">Advanced options</div>
           </div>
-
-          <div className="formGrid">
+        </div>
+        <div className="formSectionBody">
+          <div className="formGrid mb4">
             <div className="formField">
               <div className="formLabel">Prompt Enhancement</div>
-              <select
-                className="select"
-                value={rewriteMode}
-                onChange={(e) => setRewriteMode(e.target.value)}
-              >
-                <option value="gemini">Gemini AI</option>
+              <select className="select" value={rewriteMode} onChange={(e) => setRewriteMode(e.target.value)}>
+                <option value="gemini">Gemini 3</option>
                 <option value="rule">Rule-based</option>
                 <option value="none">None</option>
               </select>
             </div>
             <div className="formField">
-              <div className="formLabel">BiomedCLIP Target (Optional)</div>
+              <div className="formLabel">BiomedCLIP Target</div>
               <input
                 className="input"
                 value={target}
@@ -731,63 +538,37 @@ function CreateView({
               />
             </div>
           </div>
-
-          <div className="mt3">
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={useBiomedclip}
-                onChange={(e) => setUseBiomedclip(e.target.checked)}
-              />
-              <span>Enable BiomedCLIP validation (slower, loads ML model)</span>
-            </label>
-          </div>
+          <label className="checkbox">
+            <input type="checkbox" checked={useBiomedclip} onChange={(e) => setUseBiomedclip(e.target.checked)} />
+            <span>Enable BiomedCLIP validation (slower)</span>
+          </label>
         </div>
+      </div>
 
-        {/* Generate Button */}
-        <div className="createSection">
+      {/* Generate */}
+      <div className="formSection">
+        <div className="formSectionBody">
           <div className="flex itemsCenter justifyBetween">
-            <div className="textSm textSecondary">
-              {imageDataUrl ? "Image ready" : "Upload or generate an image first"}
+            <div className="textSm textTertiary">
+              {imageDataUrl ? "Ready to generate" : "Add an image first"}
             </div>
             <button
               className="btn btnPrimary"
               onClick={handleSubmit}
               disabled={isGenerating || !prompt.trim() || !imageDataUrl}
             >
-              {isGenerating ? (
-                <>
-                  <Loader2 size={18} className="animate-pulse" />
-                  Generating...
-                </>
-              ) : (
-                <>
-                  <Sparkles size={18} />
-                  Generate Animation
-                </>
-              )}
+              {isGenerating ? <><Loader2 size={16} className="animate-spin" /> Generating...</> : <><Sparkles size={16} /> Generate</>}
             </button>
           </div>
 
           {generationStatus && (
-            <div className={`statusMessage mt3 ${generationStatus.status === "done" ? "success" : generationStatus.status === "error" ? "error" : "info"}`}>
-              {generationStatus.status === "done" ? (
-                <Check size={18} />
-              ) : generationStatus.status === "error" ? (
-                <AlertCircle size={18} />
-              ) : (
-                <Loader2 size={18} className="animate-pulse" />
-              )}
+            <div className={`statusMsg mt4 ${generationStatus.status === "done" ? "success" : generationStatus.status === "error" ? "error" : "info"}`}>
+              {generationStatus.status === "done" ? <Check size={16} /> : generationStatus.status === "error" ? <AlertCircle size={16} /> : <Loader2 size={16} className="animate-spin" />}
               {generationStatus.message}
             </div>
           )}
 
-          {error && (
-            <div className="statusMessage mt3 error">
-              <AlertCircle size={18} />
-              {error}
-            </div>
-          )}
+          {error && <div className="statusMsg mt4 error"><AlertCircle size={16} />{error}</div>}
         </div>
       </div>
     </div>
@@ -804,122 +585,53 @@ function ExtendModal({ isOpen, onClose, jobId, onSubmit, isExtending, error, suc
   const [postprocess, setPostprocess] = useState("voiceover");
 
   useEffect(() => {
-    if (isOpen) {
-      setPrompt("");
-      setUseGemini(true);
-      setPostprocess("voiceover");
-    }
+    if (isOpen) { setPrompt(""); setUseGemini(true); setPostprocess("voiceover"); }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
   return (
     <div className="modalOverlay" onClick={() => !isExtending && onClose()}>
-      <motion.div
-        className="modal modalSmall"
-        initial={{ opacity: 0, scale: 0.95, y: 20 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        onClick={(e) => e.stopPropagation()}
-      >
+      <motion.div className="modal modalSm" initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} onClick={(e) => e.stopPropagation()}>
         <div className="modalHeader">
           <div className="modalTitle">Extend Animation</div>
-          <button 
-            className="btn btnGhost btnIcon" 
-            onClick={onClose}
-            disabled={isExtending}
-          >
-            <X size={20} />
-          </button>
+          <button className="btn btnGhost btnIcon" onClick={onClose} disabled={isExtending}><X size={18} /></button>
         </div>
         
         <div className="modalBody">
-          <div className="formField mb3">
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={useGemini}
-                onChange={(e) => setUseGemini(e.target.checked)}
-                disabled={isExtending}
-              />
-              <span>Gemini-supervised (auto-generate continuation)</span>
-            </label>
-          </div>
+          <label className="checkbox mb4">
+            <input type="checkbox" checked={useGemini} onChange={(e) => setUseGemini(e.target.checked)} disabled={isExtending} />
+            <span>Gemini-supervised continuation</span>
+          </label>
 
-          <div className="formField mb3">
-            <div className="formLabel">
-              {useGemini ? "Extension hint (optional)" : "Extension prompt (required)"}
-            </div>
+          <div className="formField mb4">
+            <div className="formLabel">{useGemini ? "Hint (optional)" : "Prompt (required)"}</div>
             <textarea
               className="textarea"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder={
-                useGemini
-                  ? 'e.g. "zoom out to show the full organ"'
-                  : 'e.g. "The camera slowly pulls back..."'
-              }
+              placeholder={useGemini ? 'e.g. "zoom out"' : 'Describe continuation...'}
               disabled={isExtending}
             />
-            {useGemini && (
-              <div className="textSm textTertiary mt2">
-                Leave blank for Gemini to decide what happens next.
-              </div>
-            )}
           </div>
 
           <div className="formField">
             <div className="formLabel">Post-process</div>
-            <select
-              className="select"
-              value={postprocess}
-              onChange={(e) => setPostprocess(e.target.value)}
-              disabled={isExtending}
-            >
+            <select className="select" value={postprocess} onChange={(e) => setPostprocess(e.target.value)} disabled={isExtending}>
               <option value="off">None</option>
               <option value="captions">Captions</option>
-              <option value="voiceover">Voiceover + Captions</option>
+              <option value="voiceover">Voiceover</option>
             </select>
           </div>
 
-          {error && (
-            <div className="statusMessage mt3 error">
-              <AlertCircle size={18} />
-              {error}
-            </div>
-          )}
-
-          {success && (
-            <div className="statusMessage mt3 success">
-              <Check size={18} />
-              Extension complete! Check your library.
-            </div>
-          )}
+          {error && <div className="statusMsg mt4 error"><AlertCircle size={16} />{error}</div>}
+          {success && <div className="statusMsg mt4 success"><Check size={16} />Done!</div>}
         </div>
 
         <div className="modalFooter">
-          <button
-            className="btn btnSecondary"
-            onClick={onClose}
-            disabled={isExtending}
-          >
-            Cancel
-          </button>
-          <button
-            className="btn btnPrimary"
-            onClick={() => onSubmit({ prompt, useGemini, postprocess })}
-            disabled={isExtending || (!useGemini && !prompt.trim())}
-          >
-            {isExtending ? (
-              <>
-                <Loader2 size={18} className="animate-pulse" />
-                Extending...
-              </>
-            ) : (
-              <>
-                <Zap size={18} />
-                Extend Video
-              </>
-            )}
+          <button className="btn btnSecondary" onClick={onClose} disabled={isExtending}>Cancel</button>
+          <button className="btn btnPrimary" onClick={() => onSubmit({ prompt, useGemini, postprocess })} disabled={isExtending || (!useGemini && !prompt.trim())}>
+            {isExtending ? <><Loader2 size={16} className="animate-spin" /> Extending...</> : <><Zap size={16} /> Extend</>}
           </button>
         </div>
       </motion.div>
@@ -938,16 +650,13 @@ export default function Home() {
   const [postprocessById, setPostprocessById] = useState({});
   const [extendStatusById, setExtendStatusById] = useState({});
   
-  // Player modal
   const [playerItem, setPlayerItem] = useState(null);
   
-  // Generation state
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStatus, setGenerationStatus] = useState(null);
   const [error, setError] = useState("");
   const [jobId, setJobId] = useState(null);
   
-  // Extend modal
   const [extendModalOpen, setExtendModalOpen] = useState(false);
   const [extendJobId, setExtendJobId] = useState(null);
   const [isExtending, setIsExtending] = useState(false);
@@ -959,12 +668,7 @@ export default function Home() {
   const extendPollersRef = useRef({});
 
   async function refreshLibrary() {
-    try {
-      const items = await apiFetchJson("/api/library");
-      setLibrary(items);
-    } catch {
-      // Non-fatal
-    }
+    try { const items = await apiFetchJson("/api/library"); setLibrary(items); } catch {}
   }
 
   async function refreshJob(id) {
@@ -972,50 +676,38 @@ export default function Home() {
       const data = await apiFetchJson(`/api/jobs/${id}`);
       if (data.job.status === "done") {
         if (pollRef.current) clearInterval(pollRef.current);
-        pollRef.current = null;
         setIsGenerating(false);
-        setGenerationStatus({ status: "done", message: "Animation created successfully!" });
+        setGenerationStatus({ status: "done", message: "Animation created!" });
         await refreshLibrary();
-        setTimeout(() => {
-          setActiveTab("library");
-          setGenerationStatus(null);
-        }, 2000);
+        setTimeout(() => { setActiveTab("library"); setGenerationStatus(null); }, 1500);
       } else if (data.job.status === "error") {
         if (pollRef.current) clearInterval(pollRef.current);
-        pollRef.current = null;
         setIsGenerating(false);
-        setGenerationStatus({ status: "error", message: data.job.error || "Generation failed" });
+        setGenerationStatus({ status: "error", message: data.job.error || "Failed" });
       } else {
-        setGenerationStatus({ status: "running", message: `Generating... (${data.job.status})` });
+        setGenerationStatus({ status: "running", message: `${data.job.status}...` });
       }
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) {
         if (pollRef.current) clearInterval(pollRef.current);
-        pollRef.current = null;
-        setError("Job not found. Please try again.");
+        setError("Job not found");
       }
     }
   }
 
   async function onGenerate(params) {
     setError("");
-    setGenerationStatus({ status: "running", message: "Starting generation..." });
+    setGenerationStatus({ status: "running", message: "Starting..." });
     setIsGenerating(true);
-
     try {
       const resp = await apiFetchJson("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: params.prompt,
-          backend: "veo",
-          input_image: params.imageDataUrl,
-          prompt_rewrite: params.rewriteMode,
-          gemini_model: "gemini-3-flash-preview",
-          veo_model: params.veoModel,
-          postprocess_mode: params.postprocessMode,
-          use_biomedclip: false,
-          biomedclip_target: null
+          prompt: params.prompt, backend: "veo", input_image: params.imageDataUrl,
+          prompt_rewrite: params.rewriteMode, gemini_model: "gemini-3-flash-preview",
+          veo_model: params.veoModel, postprocess_mode: params.postprocessMode,
+          use_biomedclip: false, biomedclip_target: null
         })
       });
       setJobId(resp.job_id);
@@ -1029,136 +721,66 @@ export default function Home() {
   }
 
   async function onPostprocess(jobId, mode) {
-    setPostprocessById((prev) => ({
-      ...prev,
-      [jobId]: { status: "running", mode, error: "" }
-    }));
-
-    if (postprocessPollersRef.current[jobId]) {
-      clearInterval(postprocessPollersRef.current[jobId]);
-      delete postprocessPollersRef.current[jobId];
-    }
-
+    setPostprocessById((prev) => ({ ...prev, [jobId]: { status: "running", mode, error: "" } }));
+    if (postprocessPollersRef.current[jobId]) { clearInterval(postprocessPollersRef.current[jobId]); delete postprocessPollersRef.current[jobId]; }
     try {
-      const resp = await apiFetchJson(`/api/jobs/${jobId}/postprocess`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, force: false })
-      });
-
+      const resp = await apiFetchJson(`/api/jobs/${jobId}/postprocess`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode, force: false }) });
       const poll = async () => {
         try {
           const data = await apiFetchJson(resp.status_url);
           const ps = String(data?.job?.postprocess_status || "").trim();
-          const pe = String(data?.job?.postprocess_error || "").trim();
           if (ps && ps !== "running") {
             clearInterval(postprocessPollersRef.current[jobId]);
             delete postprocessPollersRef.current[jobId];
-            setPostprocessById((prev) => ({
-              ...prev,
-              [jobId]: { status: ps === "error" ? "error" : "done", mode, error: pe }
-            }));
+            setPostprocessById((prev) => ({ ...prev, [jobId]: { status: ps === "error" ? "error" : "done", mode } }));
             await refreshLibrary();
           }
         } catch {}
       };
-      postprocessPollersRef.current[jobId] = setInterval(() => poll(), 2000);
+      postprocessPollersRef.current[jobId] = setInterval(poll, 2000);
       await poll();
     } catch (e) {
-      setPostprocessById((prev) => ({
-        ...prev,
-        [jobId]: { status: "error", mode, error: String(e?.message || e) }
-      }));
+      setPostprocessById((prev) => ({ ...prev, [jobId]: { status: "error", mode, error: String(e?.message || e) } }));
     }
   }
 
   async function onRemoveCaptions(jobId) {
-    setPostprocessById((prev) => ({
-      ...prev,
-      [jobId]: { status: "running", mode: "captions_remove", error: "" }
-    }));
+    setPostprocessById((prev) => ({ ...prev, [jobId]: { status: "running", mode: "captions_remove" } }));
     try {
       await apiFetchJson(`/api/jobs/${jobId}/captions`, { method: "DELETE" });
-      setPostprocessById((prev) => ({
-        ...prev,
-        [jobId]: { status: "done", mode: "captions_remove", error: "" }
-      }));
+      setPostprocessById((prev) => ({ ...prev, [jobId]: { status: "done", mode: "captions_remove" } }));
       await refreshLibrary();
     } catch (e) {
-      setPostprocessById((prev) => ({
-        ...prev,
-        [jobId]: { status: "error", mode: "captions_remove", error: String(e?.message || e) }
-      }));
+      setPostprocessById((prev) => ({ ...prev, [jobId]: { status: "error", mode: "captions_remove" } }));
     }
   }
 
-  function openExtendModal(jobId) {
-    setExtendJobId(jobId);
-    setExtendError("");
-    setExtendSuccess(false);
-    setExtendModalOpen(true);
-  }
+  function openExtendModal(jobId) { setExtendJobId(jobId); setExtendError(""); setExtendSuccess(false); setExtendModalOpen(true); }
 
   async function submitExtend(params) {
     if (!extendJobId) return;
-    if (!params.useGemini && !params.prompt.trim()) {
-      setExtendError("Please enter a prompt for the video extension.");
-      return;
-    }
-
-    setExtendError("");
-    setIsExtending(true);
-    setExtendStatusById((prev) => ({
-      ...prev,
-      [extendJobId]: { status: "running" }
-    }));
-
+    if (!params.useGemini && !params.prompt.trim()) { setExtendError("Prompt required"); return; }
+    setExtendError(""); setIsExtending(true);
+    setExtendStatusById((prev) => ({ ...prev, [extendJobId]: { status: "running" } }));
     try {
-      const resp = await apiFetchJson(`/api/jobs/${extendJobId}/extend`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: params.prompt.trim() || null,
-          use_gemini: params.useGemini,
-          postprocess_mode: params.postprocess
-        })
-      });
-
+      const resp = await apiFetchJson(`/api/jobs/${extendJobId}/extend`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: params.prompt.trim() || null, use_gemini: params.useGemini, postprocess_mode: params.postprocess }) });
       const pollExtend = async () => {
         try {
           const data = await apiFetchJson(resp.status_url);
           const status = String(data?.job?.status || "").trim();
           if (status === "done" || status === "error") {
-            if (extendPollersRef.current[extendJobId]) {
-              clearInterval(extendPollersRef.current[extendJobId]);
-              delete extendPollersRef.current[extendJobId];
-            }
-            setExtendStatusById((prev) => ({
-              ...prev,
-              [extendJobId]: { status: status === "error" ? "error" : "done" }
-            }));
+            if (extendPollersRef.current[extendJobId]) { clearInterval(extendPollersRef.current[extendJobId]); delete extendPollersRef.current[extendJobId]; }
+            setExtendStatusById((prev) => ({ ...prev, [extendJobId]: { status: status === "error" ? "error" : "done" } }));
             setIsExtending(false);
-            if (status === "done") {
-              setExtendSuccess(true);
-              await refreshLibrary();
-              setTimeout(() => {
-                setExtendModalOpen(false);
-                setPlayerItem(null);
-              }, 1500);
-            } else {
-              setExtendError(data?.job?.error || "Extension failed.");
-            }
+            if (status === "done") { setExtendSuccess(true); await refreshLibrary(); setTimeout(() => { setExtendModalOpen(false); setPlayerItem(null); }, 1200); }
+            else { setExtendError(data?.job?.error || "Failed"); }
           }
         } catch {}
       };
-
       extendPollersRef.current[extendJobId] = setInterval(pollExtend, 2000);
       await pollExtend();
     } catch (e) {
-      setExtendStatusById((prev) => ({
-        ...prev,
-        [extendJobId]: { status: "error" }
-      }));
+      setExtendStatusById((prev) => ({ ...prev, [extendJobId]: { status: "error" } }));
       setExtendError(String(e?.message || e));
       setIsExtending(false);
     }
@@ -1168,10 +790,8 @@ export default function Home() {
     refreshLibrary();
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
-      const pollers = postprocessPollersRef.current || {};
-      for (const k of Object.keys(pollers)) clearInterval(pollers[k]);
-      const extendPollers = extendPollersRef.current || {};
-      for (const k of Object.keys(extendPollers)) clearInterval(extendPollers[k]);
+      Object.values(postprocessPollersRef.current || {}).forEach(clearInterval);
+      Object.values(extendPollersRef.current || {}).forEach(clearInterval);
     };
   }, []);
 
@@ -1181,92 +801,70 @@ export default function Home() {
       <aside className="sidebar">
         <div className="sidebarHeader">
           <div className="logo">
-            <div className="logoIcon">
-              <Activity />
-            </div>
+            <div className="logoIcon"><Activity /></div>
             <span className="logoText">Medimations</span>
           </div>
         </div>
         
         <nav className="sidebarNav">
-          <button
-            className={`navItem ${activeTab === "library" ? "active" : ""}`}
-            onClick={() => setActiveTab("library")}
-          >
-            <FolderOpen />
-            Library
+          <button className={`navItem ${activeTab === "library" ? "active" : ""}`} onClick={() => setActiveTab("library")}>
+            <FolderOpen /> Library
           </button>
-          <button
-            className={`navItem ${activeTab === "create" ? "active" : ""}`}
-            onClick={() => setActiveTab("create")}
-          >
-            <Plus />
-            Create
+          <button className={`navItem ${activeTab === "create" ? "active" : ""}`} onClick={() => setActiveTab("create")}>
+            <Plus /> Create
           </button>
         </nav>
         
         <div className="sidebarFooter">
           <div className="statusPill">
             <div className="statusDot" />
-            <span>{backendBase() || "Local"}</span>
+            <span>{backendBase() ? "Railway status: online" : "Local mode"}</span>
           </div>
         </div>
       </aside>
 
-      {/* Main Content */}
+      {/* Main */}
       <main className="mainContent">
         <header className="contentHeader">
-          <h1 className="contentTitle">
-            {activeTab === "library" ? "Library" : "Create Animation"}
-          </h1>
+          <h1 className="contentTitle">{activeTab === "library" ? "Library" : "Create"}</h1>
           <div className="headerActions">
+            <button className="btn btnGhost btnSm" onClick={() => setMuted((m) => !m)}>
+              {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+            </button>
+            <button className="btn btnSecondary btnSm" onClick={refreshLibrary}>
+              <RefreshCw size={16} />
+            </button>
             {activeTab === "library" && (
-              <>
-                <button className="btn btnGhost btnSm" onClick={() => setMuted((m) => !m)}>
-                  {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
-                  {muted ? "Unmute" : "Mute"}
-                </button>
-                <button className="btn btnSecondary btnSm" onClick={refreshLibrary}>
-                  <RefreshCw size={18} />
-                  Refresh
-                </button>
-                <button className="btn btnPrimary" onClick={() => setActiveTab("create")}>
-                  <Plus size={18} />
-                  Create
-                </button>
-              </>
+              <button className="btn btnPrimary btnSm" onClick={() => setActiveTab("create")}>
+                <Plus size={16} /> New
+              </button>
             )}
           </div>
         </header>
 
         <div className="contentBody">
-          <AnimatePresence mode="wait">
-            {activeTab === "library" ? (
-              <LibraryView
-                key="library"
-                library={library}
-                onRefresh={refreshLibrary}
-                onOpenPlayer={setPlayerItem}
-                onPostprocess={onPostprocess}
-                onRemoveCaptions={onRemoveCaptions}
-                postprocessById={postprocessById}
-                onCreateNew={() => setActiveTab("create")}
-              />
-            ) : (
-              <CreateView
-                key="create"
-                onBack={() => setActiveTab("library")}
-                onGenerate={onGenerate}
-                isGenerating={isGenerating}
-                generationStatus={generationStatus}
-                error={error}
-              />
-            )}
-          </AnimatePresence>
+          {activeTab === "library" && (
+            <LibraryView
+              library={library}
+              onOpenPlayer={setPlayerItem}
+              onPostprocess={onPostprocess}
+              onRemoveCaptions={onRemoveCaptions}
+              postprocessById={postprocessById}
+              onCreateNew={() => setActiveTab("create")}
+            />
+          )}
+          {activeTab === "create" && (
+            <CreateView
+              onGenerate={onGenerate}
+              isGenerating={isGenerating}
+              generationStatus={generationStatus}
+              error={error}
+            />
+          )}
         </div>
       </main>
 
-      {/* Video Player Modal */}
+      {/* Modals */}
       <AnimatePresence>
         {playerItem && (
           <VideoPlayerModal
@@ -1281,7 +879,6 @@ export default function Home() {
         )}
       </AnimatePresence>
 
-      {/* Extend Modal */}
       <AnimatePresence>
         <ExtendModal
           isOpen={extendModalOpen}

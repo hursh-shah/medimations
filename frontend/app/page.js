@@ -437,7 +437,7 @@ function CreateView({
 }) {
   const [imageDataUrl, setImageDataUrl] = useState("");
   const [imagePrompt, setImagePrompt] = useState("");
-  const [imageModel, setImageModel] = useState("imagen-4.0-generate-preview-05-20");
+  const [imageModel, setImageModel] = useState("imagen-4.0-generate-001");
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [isCheckingImage, setIsCheckingImage] = useState(false);
   const [imageValidation, setImageValidation] = useState(null);
@@ -596,8 +596,9 @@ function CreateView({
                     value={imageModel}
                     onChange={(e) => setImageModel(e.target.value)}
                   >
-                    <option value="imagen-4.0-generate-preview-05-20">Imagen 4.0</option>
-                    <option value="imagen-4.0-ultra-generate-exp-05-20">Imagen 4.0 Ultra</option>
+                    <option value="imagen-4.0-generate-001">Imagen 4.0</option>
+                    <option value="imagen-4.0-ultra-generate-001">Imagen 4.0 Ultra</option>
+                    <option value="imagen-4.0-fast-generate-001">Imagen 4.0 Fast</option>
                   </select>
                 </div>
               </div>

@@ -137,7 +137,7 @@ class GenerateResponse(BaseModel):
 
 class GenerateImageRequest(BaseModel):
     prompt: str = Field(..., min_length=1, description="Prompt for a medical image, e.g. 'axial CT slice of liver'")
-    model: str = Field(default="imagen-4.0-generate-preview-05-20", description="Image model id (google-genai)")
+    model: str = Field(default="imagen-4.0-generate-001", description="Image model id (google-genai)")
     aspect_ratio: str = Field(default="1:1", description="Aspect ratio, e.g. 1:1 or 3:4")
     negative_prompt: Optional[str] = Field(default=None, description="Optional negative prompt")
     prompt_rewrite: Literal["gemini", "rule", "none"] = "gemini"

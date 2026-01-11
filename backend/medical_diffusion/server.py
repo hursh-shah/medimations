@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from .agent import AgentConfig, GeminiPromptAdjuster, ValidatorAgent
@@ -137,7 +137,7 @@ class GenerateResponse(BaseModel):
 
 class GenerateImageRequest(BaseModel):
     prompt: str = Field(..., min_length=1, description="Prompt for a medical image, e.g. 'axial CT slice of liver'")
-    model: str = Field(default="imagen-3.0-generate-001", description="Image model id (google-genai)")
+    model: str = Field(default="imagen-4.0-generate-preview-05-20", description="Image model id (google-genai)")
     aspect_ratio: str = Field(default="1:1", description="Aspect ratio, e.g. 1:1 or 3:4")
     negative_prompt: Optional[str] = Field(default=None, description="Optional negative prompt")
     prompt_rewrite: Literal["gemini", "rule", "none"] = "gemini"
@@ -232,11 +232,35 @@ class ExtendResponse(BaseModel):
 app = FastAPI(title="Medical Diffusion API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "*",
+        "https://medimations.vercel.app",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Ensure CORS headers are included even on unhandled exceptions."""
+    import traceback
+    error_detail = str(exc)
+    print(f"[ERROR] {request.url}: {error_detail}")
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": error_detail},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "*",
+            "Access-Control-Allow-Headers": "*",
+        },
+    )
 
 
 @app.get("/")
@@ -314,14 +338,21 @@ def generate_image(req: GenerateImageRequest) -> GenerateImageResponse:
 
     for round_index in range(max_rounds):
         rounds = round_index + 1
-        image_bytes, mime_type = _genai_generate_image_bytes(
-            client=client,
-            types=types,
-            model=req.model,
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            aspect_ratio=req.aspect_ratio,
-        )
+        try:
+            image_bytes, mime_type = _genai_generate_image_bytes(
+                client=client,
+                types=types,
+                model=req.model,
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                aspect_ratio=req.aspect_ratio,
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"Image generation failed: {str(e)}") from e
         image_path = out_dir / f"round_{round_index:02d}.png"
         image_path.write_bytes(image_bytes)
 
@@ -1428,21 +1459,26 @@ def _genai_generate_image_bytes(
     negative_prompt: Optional[str],
     aspect_ratio: str,
 ) -> tuple[bytes, str]:
-    resp = client.models.generate_images(
-        model=model,
-        prompt=prompt,
-        config=types.GenerateImagesConfig(
-            negative_prompt=(negative_prompt or "").strip() or None,
-            number_of_images=1,
-            aspect_ratio=aspect_ratio,
-            add_watermark=False,
-            output_mime_type="image/png",
-        ),
-    )
+    print(f"[Imagen] Generating image with model={model}, prompt={prompt[:100]}...")
+    try:
+        resp = client.models.generate_images(
+            model=model,
+            prompt=prompt,
+            config=types.GenerateImagesConfig(
+                negative_prompt=(negative_prompt or "").strip() or None,
+                number_of_images=1,
+                aspect_ratio=aspect_ratio,
+                add_watermark=False,
+                output_mime_type="image/png",
+            ),
+        )
+    except Exception as e:
+        print(f"[Imagen] API error: {e}")
+        raise HTTPException(status_code=500, detail=f"Imagen API error: {str(e)}") from e
 
     generated = (getattr(resp, "generated_images", None) or [])[:1]
     if not generated:
-        raise HTTPException(status_code=500, detail="Image model returned no images")
+        raise HTTPException(status_code=500, detail=f"Image model '{model}' returned no images - check model name is valid")
 
     image = getattr(generated[0], "image", None)
     image_bytes = getattr(image, "image_bytes", None)
@@ -1450,6 +1486,7 @@ def _genai_generate_image_bytes(
     if not image_bytes:
         raise HTTPException(status_code=500, detail="Image model returned empty image bytes")
 
+    print(f"[Imagen] Successfully generated image ({len(image_bytes)} bytes)")
     return bytes(image_bytes), mime_type
 
 

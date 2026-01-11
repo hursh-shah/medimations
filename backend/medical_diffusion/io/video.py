@@ -10,6 +10,33 @@ class VideoEncodeError(RuntimeError):
     pass
 
 
+def get_video_duration_seconds(video_path: Path) -> Optional[float]:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return None
+    cmd = [
+        ffprobe,
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        str(video_path),
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return None
+    out = (proc.stdout or "").strip()
+    try:
+        dur = float(out)
+    except Exception:
+        return None
+    if dur <= 0:
+        return None
+    return dur
+
+
 def encode_video_ffmpeg(
     *,
     frames_dir: Path,
@@ -83,6 +110,8 @@ def mux_audio_ffmpeg(
         str(audio_codec),
         "-b:a",
         str(audio_bitrate),
+        "-af",
+        "apad",
         "-shortest",
         "-movflags",
         "+faststart",

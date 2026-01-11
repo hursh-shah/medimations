@@ -10,13 +10,9 @@ from ..types import GenerationResult, ValidationScore
 
 class RedDotGravityValidator:
     """
-    Toy physics validator (example only):
+    Physics validator:
     - tracks the reddest pixel location across frames
     - checks that y(t) has roughly constant positive acceleration
-
-    For real medical animations, replace this with:
-    - pose/object tracking + kinematics constraints
-    - a PyBullet validation pass for constrained motion
     """
 
     name = "physics_red_dot_gravity"
@@ -81,25 +77,3 @@ class RedDotGravityValidator:
             feedback=feedback,
         )
 
-
-@dataclass
-class PyBulletPhysicsValidator:
-    """
-    Stub showing where Bullet fits.
-
-    Expected flow (tomorrow):
-    - Extract a coarse scene/state from frames (tracking / segmentation)
-    - Build a Bullet scene with constraints
-    - Simulate and compare trajectory/contacts against extracted state
-    """
-
-    name: str = "physics_pybullet"
-
-    def score(self, generation: GenerationResult) -> ValidationScore:
-        return ValidationScore(
-            name=self.name,
-            score=0.0,
-            skipped=True,
-            details={"validated": False},
-            feedback="PyBulletPhysicsValidator is a stub (skipped)",
-        )

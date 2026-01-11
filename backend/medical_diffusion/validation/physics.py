@@ -77,3 +77,35 @@ class RedDotGravityValidator:
             feedback=feedback,
         )
 
+
+class PyBulletPhysicsValidator:
+    """
+    Optional physics validator backed by PyBullet.
+
+    In production (e.g. Railway) we typically do NOT install pybullet to keep the
+    image lightweight, so this validator becomes a no-op (skipped=True).
+    """
+
+    name = "physics_pybullet"
+
+    def score(self, generation: GenerationResult) -> ValidationScore:
+        try:
+            import pybullet  # type: ignore  # noqa: F401
+        except Exception as e:
+            return ValidationScore(
+                name=self.name,
+                score=1.0,
+                skipped=True,
+                details={"reason": "pybullet_not_installed", "error": str(e)},
+                feedback="PyBullet not installed; skipping physics simulation",
+            )
+
+        # Placeholder: a real implementation would reconstruct a simplified scene
+        # or use metadata from the generator to validate physical plausibility.
+        return ValidationScore(
+            name=self.name,
+            score=1.0,
+            skipped=True,
+            details={"reason": "not_implemented"},
+            feedback="PyBullet physics validator not implemented; skipping",
+        )

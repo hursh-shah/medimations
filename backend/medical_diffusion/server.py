@@ -70,7 +70,7 @@ class JobState:
     prompt: str = ""
     backend: str = "veo"
     prompt_rewrite: str = "gemini"
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-3.0-flash"
     biomedclip_target: Optional[str] = None
     use_biomedclip: bool = True
     input_image_provided: bool = False
@@ -104,7 +104,7 @@ class GenerateRequest(BaseModel):
     )
 
     prompt_rewrite: Literal["gemini", "rule", "none"] = "gemini"
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-3.0-flash"
 
     use_biomedclip: bool = True
     biomedclip_target: Optional[str] = None
@@ -141,7 +141,7 @@ class GenerateImageRequest(BaseModel):
     aspect_ratio: str = Field(default="1:1", description="Aspect ratio, e.g. 1:1 or 3:4")
     negative_prompt: Optional[str] = Field(default=None, description="Optional negative prompt")
     prompt_rewrite: Literal["gemini", "rule", "none"] = "gemini"
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-3.0-flash"
     use_biomedclip: bool = True
     biomedclip_target: Optional[str] = None
     biomedclip_threshold: float = 0.85

@@ -13,12 +13,12 @@ class GeminiError(RuntimeError):
 @dataclass(frozen=True)
 class GeminiConfig:
     api_key: str
-    model: str = "gemini-2.0-flash"
+    model: str = "gemini-3.0-flash"
     temperature: float = 0.2
     max_output_tokens: int = 1024
 
 
-def load_gemini_config(*, model: str = "gemini-2.0-flash") -> GeminiConfig:
+def load_gemini_config(*, model: str = "gemini-3.0-flash") -> GeminiConfig:
     api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
     if not api_key:
         raise GeminiError("GOOGLE_API_KEY is not set (required for Gemini prompt rewriting)")
@@ -113,4 +113,3 @@ def get_optional_str(d: Dict[str, Any], key: str) -> Optional[str]:
         return None
     s = str(v).strip()
     return s or None
-

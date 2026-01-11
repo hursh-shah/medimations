@@ -30,7 +30,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     run_p.add_argument("--veo-resolution", default="720p", help="Veo resolution, e.g. 720p")
     run_p.add_argument("--veo-poll-seconds", type=int, default=20, help="Polling interval for Veo operations")
     run_p.add_argument("--prompt-rewrite", default="gemini", choices=["none", "rule", "gemini"], help="Prompt rewrite mode")
-    run_p.add_argument("--gemini-model", default="gemini-2.0-flash", help="Gemini model for prompt rewriting/reprompting")
+    run_p.add_argument(
+        "--gemini-model",
+        default="gemini-3.0-flash",
+        help="Gemini model for prompt rewriting/reprompting",
+    )
     run_p.add_argument("--biomedclip", action="store_true", help="(Deprecated) BiomedCLIP is no longer run on video frames by default")
     run_p.add_argument("--biomedclip-target", default=None, help="(Deprecated) Use image generation validation instead")
     run_p.add_argument("--biomedclip-labels", default=None, help="(Deprecated) Use image generation validation instead")

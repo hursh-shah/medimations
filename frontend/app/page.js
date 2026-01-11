@@ -302,7 +302,7 @@ export default function Home() {
           backend: "veo",
           input_image: imageDataUrl,
           prompt_rewrite: rewriteMode,
-          gemini_model: "gemini-2.0-flash",
+          gemini_model: "gemini-3.0-flash",
           veo_model: veoModel,
           postprocess_mode: postprocessMode,
           use_biomedclip: false,
@@ -360,7 +360,7 @@ export default function Home() {
           model: imageModel,
           aspect_ratio: "1:1",
           prompt_rewrite: "gemini",
-          gemini_model: "gemini-2.0-flash",
+          gemini_model: "gemini-3.0-flash",
           use_biomedclip: Boolean(useBiomedclip),
           biomedclip_target: useBiomedclip && target.trim() ? target.trim() : null,
           max_rounds: 2

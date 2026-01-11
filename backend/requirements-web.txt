@@ -21,3 +21,7 @@ torchvision==0.17.2+cpu; platform_system!="Darwin"
 pillow
 open_clip_torch==2.23.0
 transformers==4.35.2
+
+# Captioning + TTS (post-processing)
+twelvelabs
+deepgram-sdk

@@ -55,6 +55,30 @@ export default function Home() {
     const path = `/api/videos/${jobId}.mp4`;
     return base ? `${base}${path}` : path;
   }, [jobId]);
+  const captionsSrtUrl = useMemo(() => {
+    if (!jobId) return "";
+    const base = backendBase();
+    const path = `/api/captions/${jobId}.srt`;
+    return base ? `${base}${path}` : path;
+  }, [jobId]);
+  const captionsJsonUrl = useMemo(() => {
+    if (!jobId) return "";
+    const base = backendBase();
+    const path = `/api/captions/${jobId}.json`;
+    return base ? `${base}${path}` : path;
+  }, [jobId]);
+  const narrationAudioUrl = useMemo(() => {
+    if (!jobId) return "";
+    const base = backendBase();
+    const path = `/api/audio/${jobId}.mp3`;
+    return base ? `${base}${path}` : path;
+  }, [jobId]);
+  const narratedVideoUrl = useMemo(() => {
+    if (!jobId) return "";
+    const base = backendBase();
+    const path = `/api/videos/${jobId}/narrated.mp4`;
+    return base ? `${base}${path}` : path;
+  }, [jobId]);
 
   async function refreshLibrary() {
     try {
@@ -384,8 +408,29 @@ export default function Home() {
               <a className="btnSecondary" href={videoUrl} download={`${jobId}.mp4`}>
                 Download
               </a>
+              {job?.narrated_video_path ? (
+                <a className="btnSecondary" href={narratedVideoUrl} target="_blank" rel="noreferrer">
+                  Open narrated
+                </a>
+              ) : null}
+              {job?.captions_srt_path ? (
+                <a className="btnSecondary" href={captionsSrtUrl} target="_blank" rel="noreferrer">
+                  Captions (SRT)
+                </a>
+              ) : null}
+              {job?.captions_json_path ? (
+                <a className="btnSecondary" href={captionsJsonUrl} target="_blank" rel="noreferrer">
+                  Captions (JSON)
+                </a>
+              ) : null}
+              {job?.narration_audio_path ? (
+                <a className="btnSecondary" href={narrationAudioUrl} target="_blank" rel="noreferrer">
+                  Narration (MP3)
+                </a>
+              ) : null}
             </div>
             {job.report_summary ? <p className="muted">Scores: {job.report_summary}</p> : null}
+            {job.postprocess_error ? <p className="error">Postprocess: {job.postprocess_error}</p> : null}
           </div>
         ) : null}
       </section>
@@ -416,6 +461,21 @@ export default function Home() {
                   <a className="btnSecondary" href={item.video_url} download={`${item.job_id}.mp4`}>
                     Download
                   </a>
+                  {item.narrated_video_url ? (
+                    <a className="btnSecondary" href={item.narrated_video_url} target="_blank" rel="noreferrer">
+                      Narrated
+                    </a>
+                  ) : null}
+                  {item.captions_srt_url ? (
+                    <a className="btnSecondary" href={item.captions_srt_url} target="_blank" rel="noreferrer">
+                      Captions
+                    </a>
+                  ) : null}
+                  {item.narration_audio_url ? (
+                    <a className="btnSecondary" href={item.narration_audio_url} target="_blank" rel="noreferrer">
+                      Audio
+                    </a>
+                  ) : null}
                 </div>
               </div>
             ))}

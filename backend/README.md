@@ -78,9 +78,14 @@ uvicorn medical_diffusion.server:app --reload --port 8000
 
 API endpoints:
 - `POST /api/images/generate` → returns `{image_data_url, ...}` (optional helper for AI image generation)
+- `POST /api/images/validate` → returns BiomedCLIP score for an uploaded/generated image
 - `POST /api/generate` → returns `{job_id, status_url}` (requires `input_image` for image+text → video)
 - `GET /api/jobs/{job_id}` → status + results
-- `GET /api/videos/{job_id}.mp4` → final video
+- `GET /api/videos/{job_id}.mp4` → final video (serves narrated version if available)
+- `GET /api/videos/{job_id}/narrated.mp4` → narrated video (if generated)
+- `GET /api/captions/{job_id}.srt` → captions (if generated)
+- `GET /api/captions/{job_id}.json` → captions JSON (if generated)
+- `GET /api/audio/{job_id}.mp3` → narration audio (if generated)
 - `GET /api/library` → saved videos
 
 ### Deploy backend to Railway
@@ -91,7 +96,7 @@ Railway is easiest with the included Dockerfile:
 2) Set the service **Root Directory** to `backend/` (so it finds `backend/Dockerfile`).
 3) Add env vars:
    - `GOOGLE_API_KEY` (required)
-   - optional: `TWELVELABS_API_KEY`, `DEEPGRAM_API_KEY`
+   - optional: `TWELVELABS_API_KEY`, `TWELVELABS_INDEX_ID`, `DEEPGRAM_API_KEY`
    - Note: `requirements-web.txt` is pinned to CPU-only PyTorch wheels on Linux to avoid multi-GB CUDA installs/timeouts.
 4) (Recommended) Add a Railway Volume mounted at `/app/runs` so `runs/library` persists across deploys.
 5) Keep the service at **1 replica** unless you add shared storage for job state.

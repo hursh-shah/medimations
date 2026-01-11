@@ -487,7 +487,7 @@ function CreateView({
           model: imageModel,
           aspect_ratio: "1:1",
           prompt_rewrite: "gemini",
-          gemini_model: "gemini-3.0-flash",
+          gemini_model: "gemini-3-flash-preview",
           use_biomedclip: Boolean(useBiomedclip),
           biomedclip_target: useBiomedclip && target.trim() ? target.trim() : null,
           max_rounds: 2
@@ -1011,7 +1011,7 @@ export default function Home() {
           backend: "veo",
           input_image: params.imageDataUrl,
           prompt_rewrite: params.rewriteMode,
-          gemini_model: "gemini-3.0-flash",
+          gemini_model: "gemini-3-flash-preview",
           veo_model: params.veoModel,
           postprocess_mode: params.postprocessMode,
           use_biomedclip: false,

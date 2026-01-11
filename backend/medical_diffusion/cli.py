@@ -32,7 +32,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     run_p.add_argument("--prompt-rewrite", default="gemini", choices=["none", "rule", "gemini"], help="Prompt rewrite mode")
     run_p.add_argument(
         "--gemini-model",
-        default="gemini-3.0-flash",
+        default="gemini-3-flash-preview",
         help="Gemini model for prompt rewriting/reprompting",
     )
     run_p.add_argument("--biomedclip", action="store_true", help="(Deprecated) BiomedCLIP is no longer run on video frames by default")

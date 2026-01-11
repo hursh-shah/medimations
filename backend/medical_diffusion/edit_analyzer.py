@@ -107,7 +107,7 @@ def analyze_for_corrections(
     *,
     original_prompt: str,
     report: ValidationReport,
-    model: str = "gemini-3.0-flash",
+    model: str = "gemini-3-flash-preview",
     gemini_config: Optional[GeminiConfig] = None,
 ) -> CorrectionPlan:
     """
@@ -240,7 +240,7 @@ def generate_mask_prompt(
     *,
     edit: EditInstruction,
     frame_description: Optional[str] = None,
-    model: str = "gemini-3.0-flash",
+    model: str = "gemini-3-flash-preview",
     gemini_config: Optional[GeminiConfig] = None,
 ) -> str:
     """

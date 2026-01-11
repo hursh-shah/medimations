@@ -46,7 +46,7 @@ def rewrite_user_prompt_for_veo(
     duration_s: float,
     fps: int,
     reference_image_provided: bool = False,
-    model: str = "gemini-3.0-flash",
+    model: str = "gemini-3-flash-preview",
     gemini_config: Optional[GeminiConfig] = None,
 ) -> PromptRewriteResult:
     """
@@ -178,7 +178,7 @@ def generate_extension_prompt(
     *,
     original_prompt: str,
     user_extension_hint: Optional[str] = None,
-    model: str = "gemini-3.0-flash",
+    model: str = "gemini-3-flash-preview",
     gemini_config: Optional[GeminiConfig] = None,
 ) -> ExtensionPromptResult:
     """

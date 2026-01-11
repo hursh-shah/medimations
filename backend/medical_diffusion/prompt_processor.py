@@ -73,7 +73,7 @@ class PromptProcessor:
 
         return replace(spec, prompt=prompt, negative_prompt=negative, metadata=metadata)
 
-    def rewrite_for_veo_gemini(self, spec: AnimationSpec, *, model: str = "gemini-3.0-flash") -> AnimationSpec:
+    def rewrite_for_veo_gemini(self, spec: AnimationSpec, *, model: str = "gemini-3-flash-preview") -> AnimationSpec:
         """
         Rewrite using Gemini (requires GOOGLE_API_KEY + google-genai).
 

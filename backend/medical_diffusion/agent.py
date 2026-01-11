@@ -55,7 +55,7 @@ class GeminiPromptAdjuster(PromptAdjuster):
     Falls back to RuleBasedPromptAdjuster if Gemini is unavailable.
     """
 
-    def __init__(self, *, model: str = "gemini-3.0-flash") -> None:
+    def __init__(self, *, model: str = "gemini-3-flash-preview") -> None:
         self._model = model
         self._fallback = RuleBasedPromptAdjuster()
 
@@ -333,7 +333,7 @@ class SmartValidatorAgent:
         physics_validators: Sequence[Validator],
         config: SmartAgentConfig,
         prompt_adjuster: Optional[PromptAdjuster] = None,
-        gemini_model: str = "gemini-3.0-flash",
+        gemini_model: str = "gemini-3-flash-preview",
         run_root: Optional[Path] = None,
     ) -> None:
         self._generator = generator

@@ -1,13 +1,21 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Medical Diffusion",
-  description: "Generate medically grounded animations with Veo + BiomedCLIP verification"
+  title: "Medimations",
+  description: "AI-powered medical animations with clinical precision"
 };
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
+      <head>
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link
+          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+          rel="stylesheet"
+        />
+      </head>
       <body>{children}</body>
     </html>
   );

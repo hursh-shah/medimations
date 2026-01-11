@@ -8,7 +8,7 @@ from ..types import GenerationResult, ValidationScore
 
 class FrameSanityMedicalValidator:
     """
-    Not "medical correctness" — just basic sanity checks to keep the loop real.
+    Not "medical correctness" — just basic sanity checks.
 
     Replace/extend with:
     - CLIP/OpenCLIP embeddings vs a labeled reference library

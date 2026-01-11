@@ -40,6 +40,15 @@ python3 -m medical_diffusion run --prompt "liver ct axial slice" --no-video
 
 By default `run` uses Gemini-based prompt rewriting (same `GOOGLE_API_KEY`). You can disable it with `--prompt-rewrite rule` or `--prompt-rewrite none`.
 
+### Demo backend (no Veo, no API keys)
+
+Use this to test the full workflow (jobs → polling → video export) without consuming Veo/Gemini quota:
+```bash
+cd backend
+uvicorn medical_diffusion.server:app --reload --port 8000
+```
+Then call `POST /api/generate` with `"backend": "demo"` (or use the frontend “Test (no Veo)” button).
+
 ### BiomedCLIP medical verifier (optional)
 
 BiomedCLIP can score sampled frames against text labels (guardrail-style). Install:
@@ -88,7 +97,8 @@ Railway is easiest with the included Dockerfile:
    - optional: `TWELVELABS_API_KEY`, `DEEPGRAM_API_KEY`
    - Note: `requirements-web.txt` is pinned to CPU-only PyTorch wheels on Linux to avoid multi-GB CUDA installs/timeouts.
 4) (Recommended) Add a Railway Volume mounted at `/app/runs` so `runs/library` persists across deploys.
-5) Deploy, then check `https://<your-railway-domain>/api/health`.
+5) Keep the service at **1 replica** unless you add shared storage for job state.
+6) Deploy, then check `https://<your-railway-domain>/api/health`.
 
 ### Where to plug in real stuff
 

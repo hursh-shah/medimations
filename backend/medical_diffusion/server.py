@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .agent import AgentConfig, GeminiPromptAdjuster, ValidatorAgent
+from .generation.demo import DemoBackend
 from .generation.veo_genai import VeoGenaiBackend
 from .io.export import export_final_video
 from .prompt_processor import PromptProcessor
@@ -57,7 +58,7 @@ _job_fields = {f.name for f in fields(JobState)}
 
 class GenerateRequest(BaseModel):
     prompt: str = Field(..., min_length=1, description="User prompt, e.g. 'heart surgery video'")
-    backend: Literal["veo"] = "veo"
+    backend: Literal["veo", "demo"] = "veo"
 
     prompt_rewrite: Literal["gemini", "rule", "none"] = "gemini"
     gemini_model: str = "gemini-2.0-flash"
@@ -65,7 +66,7 @@ class GenerateRequest(BaseModel):
     use_biomedclip: bool = True
     biomedclip_target: Optional[str] = None
 
-    max_rounds: int = 3
+    max_rounds: int = 2
     candidates: int = 1
     medical_threshold: float = 0.85
     physics_threshold: float = 0.85
@@ -77,7 +78,7 @@ class GenerateRequest(BaseModel):
     height: Optional[int] = None
 
     # Veo backend knobs
-    veo_model: str = "veo-3.1-fast-generate-preview"
+    veo_model: str = "veo-3.1-generate-preview"
     veo_aspect_ratio: str = "9:16"
     veo_resolution: str = "720p"
     veo_poll_seconds: int = 20
@@ -222,13 +223,15 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
 
         physics_validators = [RedDotGravityValidator(), PyBulletPhysicsValidator()]
 
-        prompt_adjuster = GeminiPromptAdjuster(model=req.gemini_model) if req.prompt_rewrite == "gemini" else None
+        prompt_adjuster = (
+            GeminiPromptAdjuster(model=req.gemini_model) if (req.backend == "veo" and req.prompt_rewrite == "gemini") else None
+        )
         agent = ValidatorAgent(
             generator=backend,
             medical_validators=medical_validators,
             physics_validators=physics_validators,
             config=AgentConfig(
-                max_rounds=int(req.max_rounds),
+                max_rounds=min(2, int(req.max_rounds)),
                 candidates_per_round=int(req.candidates),
                 medical_threshold=float(req.medical_threshold),
                 physics_threshold=float(req.physics_threshold),
@@ -317,6 +320,8 @@ def _make_backend(req: GenerateRequest):
             resolution=req.veo_resolution,
             poll_seconds=int(req.veo_poll_seconds),
         )
+    if req.backend == "demo":
+        return DemoBackend()
     raise ValueError(f"Unsupported backend: {req.backend}")
 
 

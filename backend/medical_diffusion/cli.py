@@ -24,7 +24,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     run_p.add_argument("--out", default="runs/output.mp4", help="Output video path")
     run_p.add_argument("--no-video", action="store_true", help="Skip ffmpeg encode; leave frames on disk")
     run_p.add_argument("--negative-prompt", default=None, help="Optional negative prompt (backends that support it)")
-    run_p.add_argument("--veo-model", default="veo-3.1-fast-generate-preview", help="Veo model id")
+    run_p.add_argument("--veo-model", default="veo-3.1-generate-preview", help="Veo model id")
     run_p.add_argument("--veo-aspect-ratio", default="9:16", help="Veo aspect ratio, e.g. 9:16")
     run_p.add_argument("--veo-resolution", default="720p", help="Veo resolution, e.g. 720p")
     run_p.add_argument("--veo-poll-seconds", type=int, default=20, help="Polling interval for Veo operations")
@@ -34,7 +34,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     run_p.add_argument("--biomedclip-target", default=None, help="Expected target label (e.g. 'liver'); inferred from prompt if omitted")
     run_p.add_argument("--biomedclip-labels", default=None, help="Comma-separated labels (or path to a newline-delimited .txt)")
     run_p.add_argument("--biomedclip-frames", type=int, default=12, help="Frames sampled for BiomedCLIP scoring")
-    run_p.add_argument("--max-rounds", type=int, default=3)
+    run_p.add_argument("--max-rounds", type=int, default=2)
     run_p.add_argument("--candidates", type=int, default=1)
     run_p.add_argument("--medical-threshold", type=float, default=0.85)
     run_p.add_argument("--physics-threshold", type=float, default=0.85)
@@ -114,7 +114,7 @@ def _run(args: argparse.Namespace) -> int:
         medical_validators=medical_validators,
         physics_validators=physics_validators,
         config=AgentConfig(
-            max_rounds=args.max_rounds,
+            max_rounds=min(2, int(args.max_rounds)),
             candidates_per_round=args.candidates,
             medical_threshold=args.medical_threshold,
             physics_threshold=args.physics_threshold,

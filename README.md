@@ -34,6 +34,7 @@ Open `http://localhost:3000`.
 - Service root directory: `backend/` (so it picks up `backend/Dockerfile`)
 - Env vars (Railway): `GOOGLE_API_KEY` (required)
 - Domain: use a **public** Railway domain (not `.railway.internal`) and route to the service port (`PORT`, usually `8080`)
+- Replicas: keep **1 replica** (jobs are stored locally; multi-replica needs shared storage)
 - Health check: `https://<your-railway-domain>/api/health`
 
 **Vercel (frontend)**

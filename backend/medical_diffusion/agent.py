@@ -12,8 +12,8 @@ from .validation.base import Validator
 
 @dataclass(frozen=True)
 class AgentConfig:
-    # "max 2 reprompts" => 3 rounds total (initial + 2 retries).
-    max_rounds: int = 3
+    # "max 1 reprompt" => 2 rounds total (initial + 1 retry).
+    max_rounds: int = 2
     candidates_per_round: int = 1
     medical_threshold: float = 0.85
     physics_threshold: float = 0.85

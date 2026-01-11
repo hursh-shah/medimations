@@ -107,9 +107,34 @@ input {
   outline: none;
 }
 
+input[type="checkbox"] {
+  width: auto;
+}
+
+select {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(8, 12, 18, 0.6);
+  color: var(--text);
+  outline: none;
+}
+
 input:focus {
   border-color: rgba(110, 168, 254, 0.55);
   box-shadow: 0 0 0 3px rgba(110, 168, 254, 0.15);
+}
+
+select:focus {
+  border-color: rgba(110, 168, 254, 0.55);
+  box-shadow: 0 0 0 3px rgba(110, 168, 254, 0.15);
+}
+
+input:disabled,
+select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .row {
@@ -213,4 +238,3 @@ input:focus {
   margin-top: 6px;
   font-size: 12px;
 }
-

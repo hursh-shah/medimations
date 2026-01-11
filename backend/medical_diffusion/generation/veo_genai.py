@@ -23,7 +23,7 @@ class VeoGenaiBackend:
       export GOOGLE_API_KEY=...
     """
 
-    model: str = "veo-3.1-fast-generate-preview"
+    model: str = "veo-3.1-generate-preview"
     aspect_ratio: str = "9:16"
     resolution: str = "720p"
     poll_seconds: int = 20

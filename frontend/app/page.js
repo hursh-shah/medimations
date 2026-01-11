@@ -34,6 +34,9 @@ async function apiFetch(path, init) {
 export default function Home() {
   const [prompt, setPrompt] = useState("");
   const [target, setTarget] = useState("");
+  const [rewriteMode, setRewriteMode] = useState("gemini");
+  const [veoModel, setVeoModel] = useState("veo-3.1-generate-preview");
+  const [useBiomedclip, setUseBiomedclip] = useState(true);
   const [jobId, setJobId] = useState(null);
   const [job, setJob] = useState(null);
   const [error, setError] = useState("");
@@ -92,14 +95,49 @@ export default function Home() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt,
-          prompt_rewrite: "gemini",
-          use_biomedclip: true,
-          biomedclip_target: target.trim() ? target.trim() : null
+          backend: "veo",
+          prompt_rewrite: rewriteMode,
+          gemini_model: "gemini-2.0-flash",
+          veo_model: veoModel,
+          use_biomedclip: Boolean(useBiomedclip),
+          biomedclip_target: useBiomedclip && target.trim() ? target.trim() : null
         })
       });
       setJobId(resp.job_id);
       await refreshJob(resp.job_id);
       pollRef.current = setInterval(() => refreshJob(resp.job_id).catch(() => {}), 2000);
+    } catch (e) {
+      setError(String(e?.message || e));
+    }
+  }
+
+  async function onTestNoVeo() {
+    setError("");
+    setJob(null);
+    setJobId(null);
+
+    try {
+      const resp = await apiFetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt: prompt.trim() ? prompt.trim() : "demo: falling red dot",
+          backend: "demo",
+          prompt_rewrite: "none",
+          use_biomedclip: false,
+          max_rounds: 1,
+          candidates: 1,
+          medical_threshold: 0.0,
+          physics_threshold: 0.0,
+          fps: 8,
+          duration_s: 2.0,
+          width: 256,
+          height: 256
+        })
+      });
+      setJobId(resp.job_id);
+      await refreshJob(resp.job_id);
+      pollRef.current = setInterval(() => refreshJob(resp.job_id).catch(() => {}), 500);
     } catch (e) {
       setError(String(e?.message || e));
     }
@@ -117,7 +155,7 @@ export default function Home() {
       <header className="header">
         <div>
           <h1>Medical Diffusion</h1>
-          <p className="muted">Veo 3.1 generation + BiomedCLIP verification + up to 2 reprompts.</p>
+          <p className="muted">Veo 3.1 generation + BiomedCLIP verification + up to 1 reprompt.</p>
         </div>
         <a className="link" href="https://vercel.com" target="_blank" rel="noreferrer">
           Deploy on Vercel
@@ -137,12 +175,45 @@ export default function Home() {
           </label>
           <label className="field">
             <span>BiomedCLIP target (optional)</span>
-            <input value={target} onChange={(e) => setTarget(e.target.value)} placeholder='e.g. "heart" or "capillary"' />
+            <input
+              value={target}
+              onChange={(e) => setTarget(e.target.value)}
+              placeholder='e.g. "heart" or "capillary"'
+              disabled={!useBiomedclip}
+            />
           </label>
         </div>
+        <div className="grid2">
+          <label className="field">
+            <span>Prompt rewriting</span>
+            <select value={rewriteMode} onChange={(e) => setRewriteMode(e.target.value)}>
+              <option value="gemini">Gemini (best quality, uses quota)</option>
+              <option value="rule">Rule-based (no quota)</option>
+              <option value="none">None</option>
+            </select>
+          </label>
+          <label className="field">
+            <span>Veo model</span>
+            <select value={veoModel} onChange={(e) => setVeoModel(e.target.value)}>
+              <option value="veo-3.1-generate-preview">veo-3.1-generate-preview</option>
+              <option value="veo-3.1-fast-generate-preview">veo-3.1-fast-generate-preview</option>
+            </select>
+          </label>
+        </div>
+        <label className="row" style={{ gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={useBiomedclip}
+            onChange={(e) => setUseBiomedclip(e.target.checked)}
+          />
+          <span className="muted">Use BiomedCLIP medical validator</span>
+        </label>
         <div className="row">
           <button className="btn" onClick={onGenerate} disabled={job?.status === "running"}>
-            {job?.status === "running" ? "Generating…" : "Generate"}
+            {job?.status === "running" ? "Generating…" : "Generate (Veo)"}
+          </button>
+          <button className="btnSecondary" onClick={onTestNoVeo} disabled={job?.status === "running"}>
+            Test (no Veo)
           </button>
           {jobId ? <span className="muted">Job: {jobId}</span> : null}
           {job ? <span className="muted">Status: {job.status}</span> : null}

@@ -199,6 +199,11 @@ class PostprocessResponse(BaseModel):
     status_url: str
 
 
+class DeleteAssetsResponse(BaseModel):
+    job_id: str
+    deleted: List[str]
+
+
 app = FastAPI(title="Medical Diffusion API", version="0.1.0")
 app.add_middleware(
     CORSMiddleware,
@@ -413,6 +418,25 @@ def postprocess(job_id: str, req: PostprocessRequest) -> PostprocessResponse:
     thread.start()
 
     return PostprocessResponse(job_id=job_id, status_url=f"/api/jobs/{job_id}")
+
+
+@app.delete("/api/jobs/{job_id}/captions", response_model=DeleteAssetsResponse)
+def delete_captions(job_id: str) -> DeleteAssetsResponse:
+    _validate_job_id(job_id)
+
+    deleted: List[str] = []
+    for path in (_library_captions_srt_path(job_id), _library_captions_json_path(job_id)):
+        if not path.exists():
+            continue
+        try:
+            path.unlink()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to delete {path.name}: {e}") from e
+        deleted.append(path.name)
+
+    _update_job(job_id, captions_summary=None, captions_srt_path=None, captions_json_path=None)
+    _refresh_library_meta_assets(job_id)
+    return DeleteAssetsResponse(job_id=job_id, deleted=deleted)
 
 
 @app.get("/api/videos/{job_id}.mp4")
@@ -948,6 +972,33 @@ def _update_library_meta_postprocess(
     meta["postprocess_mode"] = mode
     meta["postprocess_status"] = postprocess_status
     meta["postprocess_error"] = post.get("error")
+
+    try:
+        meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False))
+    except Exception:
+        return
+
+
+def _refresh_library_meta_assets(job_id: str) -> None:
+    meta_path = LIBRARY_DIR / f"{job_id}.json"
+    if not meta_path.exists():
+        return
+    try:
+        meta = json.loads(meta_path.read_text())
+    except Exception:
+        return
+    if not isinstance(meta, dict):
+        return
+
+    has_srt = _library_captions_srt_path(job_id).exists()
+    has_json = _library_captions_json_path(job_id).exists()
+    meta["has_captions_srt"] = bool(has_srt)
+    meta["has_captions_json"] = bool(has_json)
+    meta["has_narration_audio"] = _library_narration_audio_path(job_id).exists()
+    meta["has_narrated_video"] = _library_narrated_video_path(job_id).exists()
+
+    if not has_srt and not has_json:
+        meta["captions_summary"] = None
 
     try:
         meta_path.write_text(json.dumps(meta, indent=2, ensure_ascii=False))

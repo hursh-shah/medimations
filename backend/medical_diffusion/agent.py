@@ -8,6 +8,7 @@ from typing import List, Optional, Sequence
 
 from .types import AgentResult, AgentRound, AnimationSpec, GenerationResult, ValidationReport, ValidationScore
 from .validation.base import Validator
+from .veo_guidelines import get_adjuster_system_prompt, get_default_negative_prompt
 
 
 @dataclass(frozen=True)
@@ -57,9 +58,16 @@ class GeminiPromptAdjuster(PromptAdjuster):
         self._fallback = RuleBasedPromptAdjuster()
 
     def adjust(self, *, spec: AnimationSpec, report: ValidationReport, round_index: int) -> AnimationSpec:
+        """
+        Adjust the Veo prompt based on validation feedback using Gemini.
+        
+        Uses the comprehensive Veo guidelines to generate an improved prompt
+        that addresses the specific issues identified by validators.
+        """
         metadata = dict(spec.metadata or {})
         user_prompt = str(metadata.get("user_prompt") or "").strip() or spec.prompt
 
+        # Collect suggested keywords from validators
         suggested = []
         if isinstance(report.medical.details, dict):
             suggested.extend(report.medical.details.get("suggested_keywords", []) or [])
@@ -71,38 +79,60 @@ class GeminiPromptAdjuster(PromptAdjuster):
         suggested = [s for s in suggested if not (s in seen or seen.add(s))]
         suggested = suggested[:12]
 
-        ref_constraint = (
-            "A reference image is provided as the starting frame (image-to-video); preserve its anatomy/viewpoint/style."
-            if spec.input_image_path is not None
-            else "No reference image is provided (text-only)."
-        )
-        system = f"""You are a prompt engineer for Veo 3.1 generating short biomedical animations. You are also a physician with great medical knowledge.
+        # Build reference image context
+        if spec.input_image_path is not None:
+            ref_context = (
+                "A reference image IS provided (image-to-video mode). "
+                "The reference image is the starting frame. "
+                "You MUST preserve its anatomy, viewpoint, and visual style. "
+                "Only animate realistic motion consistent with the reference."
+            )
+        else:
+            ref_context = "No reference image is provided (text-only generation)."
 
-You will be given:
-- the original user request
-- the previous Veo prompt
-- whether an input reference image is provided
-- validator scores + feedback
-- suggested keywords to fix medical/physics issues
+        # Build validation feedback summary
+        validation_summary = f"""
+VALIDATION RESULTS (scores are 0.0 to 1.0, higher is better):
 
-Output STRICT JSON (no markdown):
-{{
-  "veo_prompt": "string",
-  "negative_prompt": "string"
-}}
-Keep the prompt a single concise paragraph. Include: subject, action, setting, camera, style, constraints (no on-screen text/watermark).
-{ref_constraint}
+Medical Accuracy:
+- Score: {report.medical.score:.3f}
+- Feedback: {report.medical.feedback or "No specific feedback"}
+- Issues to address: {"Passing" if report.medical.score >= 0.85 else "Needs improvement - strengthen anatomical accuracy"}
+
+Physics/Motion:
+- Score: {report.physics.score:.3f}
+- Feedback: {report.physics.feedback or "No specific feedback"}
+- Issues to address: {"Passing" if report.physics.score >= 0.85 else "Needs improvement - fix temporal consistency and motion physics"}
+
+Suggested keywords to incorporate: {", ".join(suggested) if suggested else "None provided"}
 """
 
-        user = f"""original_user_request: {user_prompt}
-previous_veo_prompt: {spec.prompt}
-reference_image_provided: {bool(spec.input_image_path is not None)}
-round_index: {round_index}
-medical_score: {report.medical.score:.3f}
-medical_feedback: {report.medical.feedback}
-physics_score: {report.physics.score:.3f}
-physics_feedback: {report.physics.feedback}
-suggested_keywords: {", ".join(suggested)}
+        # Use comprehensive system prompt from veo_guidelines
+        system = get_adjuster_system_prompt()
+
+        user = f"""REPROMPTING TASK
+
+Original user request: {user_prompt}
+
+Previous Veo prompt (to improve):
+{spec.prompt}
+
+Reference image: {ref_context}
+
+Round: {round_index + 1} (attempting to fix validation issues)
+
+{validation_summary}
+
+Instructions:
+1. Analyze the validation feedback carefully
+2. Identify which Veo prompt elements need strengthening
+3. Incorporate suggested keywords naturally into the prompt
+4. Strengthen anatomical accuracy and temporal consistency language
+5. Maintain successful elements from the previous prompt
+6. Follow Veo best practices for camera, lighting, and style
+7. Ensure constraints: no on-screen text, no watermarks
+
+Output the improved JSON response.
 """
 
         try:
@@ -114,6 +144,11 @@ suggested_keywords: {", ".join(suggested)}
             negative_prompt = get_optional_str(data, "negative_prompt")
             if not veo_prompt:
                 raise RuntimeError("Gemini returned no veo_prompt")
+            
+            # Use default negative prompt if none provided
+            if not negative_prompt:
+                negative_prompt = get_default_negative_prompt()
+                
         except Exception as e:
             metadata["reprompt_mode"] = "rule_fallback"
             metadata["reprompt_error"] = str(e)

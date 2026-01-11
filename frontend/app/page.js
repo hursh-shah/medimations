@@ -98,7 +98,16 @@ function DownloadLink({ jobId, kind, children }) {
   );
 }
 
-function FeedItem({ item, isActive, muted, onToggleMute, postprocess, onPostprocess, setRef }) {
+function FeedItem({
+  item,
+  isActive,
+  muted,
+  onToggleMute,
+  postprocess,
+  onPostprocess,
+  onRemoveCaptions,
+  setRef
+}) {
   const videoRef = useRef(null);
   const captionsRef = useRef(null);
   const lastCaptionRef = useRef("");
@@ -107,6 +116,13 @@ function FeedItem({ item, isActive, muted, onToggleMute, postprocess, onPostproc
   const src = item?.narrated_video_url || item?.video_url || "";
   const hasCaptions = Boolean(item?.captions_srt_url);
   const hasVoiceover = Boolean(item?.narrated_video_url);
+
+  useEffect(() => {
+    if (hasCaptions) return;
+    captionsRef.current = null;
+    lastCaptionRef.current = "";
+    setCaption("");
+  }, [hasCaptions, item?.captions_srt_url]);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -187,10 +203,14 @@ function FeedItem({ item, isActive, muted, onToggleMute, postprocess, onPostproc
         <div className="actions" onClick={(e) => e.stopPropagation()}>
           <button
             className="actionBtn"
-            disabled={busy || hasCaptions}
-            onClick={() => onPostprocess(item.job_id, "captions")}
+            disabled={busy}
+            onClick={() => (hasCaptions ? onRemoveCaptions(item.job_id) : onPostprocess(item.job_id, "captions"))}
           >
-            {busy && postprocess?.mode === "captions" ? "…" : hasCaptions ? "CC ✓" : "CC"}
+            {busy && (postprocess?.mode === "captions" || postprocess?.mode === "captions_remove")
+              ? "…"
+              : hasCaptions
+                ? "CC ✓"
+                : "CC"}
           </button>
           <button
             className="actionBtn"
@@ -446,6 +466,28 @@ export default function Home() {
     }
   }
 
+  async function onRemoveCaptions(jobId) {
+    setError("");
+    setPostprocessById((prev) => ({
+      ...prev,
+      [jobId]: { status: "running", mode: "captions_remove", error: "" }
+    }));
+    try {
+      await apiFetchJson(`/api/jobs/${jobId}/captions`, { method: "DELETE" });
+      setPostprocessById((prev) => ({
+        ...prev,
+        [jobId]: { status: "done", mode: "captions_remove", error: "" }
+      }));
+      await refreshLibrary();
+    } catch (e) {
+      setPostprocessById((prev) => ({
+        ...prev,
+        [jobId]: { status: "error", mode: "captions_remove", error: String(e?.message || e) }
+      }));
+      setError(String(e?.message || e));
+    }
+  }
+
   useEffect(() => {
     refreshLibrary();
     return () => {
@@ -518,6 +560,7 @@ export default function Home() {
                 onToggleMute={() => setMuted((m) => !m)}
                 postprocess={postprocessById[item.job_id]}
                 onPostprocess={onPostprocess}
+                onRemoveCaptions={onRemoveCaptions}
               />
             ))}
           </div>

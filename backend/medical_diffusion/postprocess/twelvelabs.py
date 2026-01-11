@@ -30,6 +30,8 @@ Output format (STRICT JSON, no markdown):
 Hard requirements:
 - The narration should last the FULL video duration (do not end early).
 - Target speaking rate: ~150 words/minute (~2.5 words/second).
+- BE EXTREMELY CONCISE for short videos. If `voiceover_target_words` is provided, keep narration within ±15% of it.
+- Use 1–2 short sentences total for an ~8s clip.
 - Captions must cover the entire timeline: first start_s=0.0, last end_s should be close to the end of the video.
 - Captions must be exactly what the narrator says during that time window.
 - Do not invent events not visible; if unclear, list in medical_uncertainties instead of guessing.
@@ -204,9 +206,13 @@ def generate_captions_with_twelvelabs(
     prompt_with_duration = prompt
     if duration_s:
         target_words = int(round(float(duration_s) * 2.5))
+        min_words = max(1, int(round(target_words * 0.85)))
+        max_words = max(min_words, int(round(target_words * 1.15)))
         prompt_with_duration = (
             f"video_duration_s: {duration_s:.2f}\n"
-            f"voiceover_target_words: ~{target_words} (at ~2.5 words/second)\n\n"
+            f"voiceover_target_words: {target_words}\n"
+            f"voiceover_min_words: {min_words}\n"
+            f"voiceover_max_words: {max_words}\n\n"
             f"{prompt}"
         )
 

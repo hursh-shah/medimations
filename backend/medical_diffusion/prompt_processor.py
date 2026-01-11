@@ -4,15 +4,12 @@ import re
 from dataclasses import replace
 
 from .types import AnimationSpec
+from .veo_guidelines import get_default_negative_prompt
 
 
 class PromptProcessor:
     """
-    Minimal, hackathon-grade prompt parsing.
-
-    Tomorrow you can replace this with:
-    - a real schema extractor (LLM -> JSON)
-    - a prompt template system (style, constraints, camera)
+    Minimal, rules-based prompt parsing.
     """
 
     _DURATION_RE = re.compile(r"(?P<seconds>\d+(?:\.\d+)?)\s*(?:s|sec|secs|seconds)\b", re.I)
@@ -72,7 +69,7 @@ class PromptProcessor:
 
         negative = spec.negative_prompt
         if not negative:
-            negative = "cartoon, anime, fantasy, unrealistic anatomy, text, watermark, low quality, blurry"
+            negative = get_default_negative_prompt()
 
         return replace(spec, prompt=prompt, negative_prompt=negative, metadata=metadata)
 
@@ -113,6 +110,6 @@ class PromptProcessor:
 
         negative = spec.negative_prompt or rewritten.negative_prompt
         if not negative:
-            negative = "cartoon, anime, fantasy, unrealistic anatomy, text, watermark, low quality, blurry"
+            negative = get_default_negative_prompt()
 
         return replace(spec, prompt=rewritten.veo_prompt, negative_prompt=negative, metadata=metadata)

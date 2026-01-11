@@ -1460,17 +1460,31 @@ def _genai_generate_image_bytes(
     aspect_ratio: str,
 ) -> tuple[bytes, str]:
     print(f"[Imagen] Generating image with model={model}, prompt={prompt[:100]}...")
+    
+    # Imagen 4 (via Gemini API) doesn't support negative_prompt
+    is_imagen4 = "imagen-4" in model.lower()
+    
     try:
-        resp = client.models.generate_images(
-            model=model,
-            prompt=prompt,
-            config=types.GenerateImagesConfig(
+        # Build config - Imagen 4 doesn't support negative_prompt or add_watermark
+        if is_imagen4:
+            config = types.GenerateImagesConfig(
+                number_of_images=1,
+                aspect_ratio=aspect_ratio,
+                output_mime_type="image/png",
+            )
+        else:
+            config = types.GenerateImagesConfig(
                 negative_prompt=(negative_prompt or "").strip() or None,
                 number_of_images=1,
                 aspect_ratio=aspect_ratio,
                 add_watermark=False,
                 output_mime_type="image/png",
-            ),
+            )
+            
+        resp = client.models.generate_images(
+            model=model,
+            prompt=prompt,
+            config=config,
         )
     except Exception as e:
         print(f"[Imagen] API error: {e}")

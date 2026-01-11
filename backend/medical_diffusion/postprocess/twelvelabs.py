@@ -61,7 +61,8 @@ def generate_captions_with_twelvelabs(
     except Exception as e:
         raise RuntimeError("Missing dependency: pip install twelvelabs") from e
 
-    client = TwelveLabs(config.api_key)
+    # TwelveLabs SDK uses keyword-only args (api_key=...).
+    client = TwelveLabs(api_key=config.api_key)
 
     index_id = config.index_id
     if not index_id:
@@ -79,7 +80,8 @@ def generate_captions_with_twelvelabs(
     task = client.task.create(index_id=index_id, file=str(video_path), language=config.language)
     task.wait_for_done()
 
-    res = client.analyze(task.video_id, prompt)
+    # SDK uses keyword-only params for analyze(): video_id=..., prompt=...
+    res = client.analyze(video_id=task.video_id, prompt=prompt)
     raw = getattr(res, "data", None) or ""
 
     parsed = parse_caption_result(str(raw))
@@ -88,4 +90,3 @@ def generate_captions_with_twelvelabs(
 
     # Fallback: treat the whole response as a narration blob.
     return CaptionResult(summary="", segments=[], narration=str(raw).strip(), medical_uncertainties=[])
-

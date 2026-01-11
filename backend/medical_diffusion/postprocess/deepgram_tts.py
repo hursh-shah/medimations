@@ -28,17 +28,25 @@ def synthesize_narration_with_deepgram(
     web app later without changing call sites.
     """
     try:
-        from deepgram import DeepgramClient, SpeakOptions
+        from deepgram import DeepgramClient
     except Exception as e:
         raise RuntimeError("Missing dependency: pip install deepgram-sdk") from e
 
-    client = DeepgramClient(config.api_key)
-
-    options = SpeakOptions(model=config.model, encoding=config.encoding)
+    client = DeepgramClient(api_key=config.api_key)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    response = client.speak.v("1").save(output_path, {"text": text}, options)
-    if response is None:
-        raise RuntimeError("Deepgram TTS returned no response")
-    return output_path
+    try:
+        response = client.speak.v1.audio.generate(text=text, model=config.model, encoding=config.encoding)
+    except TypeError:
+        # Older/newer SDK variants may not expose model/encoding kwargs.
+        response = client.speak.v1.audio.generate(text=text)
+    audio = getattr(response, "stream", None)
+    if audio is None:
+        raise RuntimeError("Deepgram TTS returned no audio stream")
 
+    data = audio.getvalue()
+    if not data:
+        raise RuntimeError("Deepgram TTS returned empty audio")
+
+    output_path.write_bytes(data)
+    return output_path

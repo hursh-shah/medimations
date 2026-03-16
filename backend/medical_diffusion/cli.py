@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 from dataclasses import replace
 from pathlib import Path
 from typing import Optional
@@ -15,10 +16,38 @@ from .validation.medical import FrameSanityMedicalValidator
 from .validation.physics import PyBulletPhysicsValidator, RedDotGravityValidator
 
 
+# ---------------------------------------------------------------------------
+# Shared argument helpers
+# ---------------------------------------------------------------------------
+
+def _add_veo_args(parser: argparse.ArgumentParser, *, extension: bool = False) -> None:
+    parser.add_argument("--veo-model", default="veo-3.1-generate-preview", help="Veo model id")
+    if extension:
+        parser.add_argument("--veo-aspect-ratio", default="16:9", help="Veo aspect ratio (extension requires 16:9)")
+        parser.add_argument("--veo-resolution", default="720p", help="Veo resolution (extension requires 720p)")
+    else:
+        parser.add_argument("--veo-aspect-ratio", default="9:16", help="Veo aspect ratio, e.g. 9:16")
+        parser.add_argument("--veo-resolution", default="720p", help="Veo resolution, e.g. 720p")
+    parser.add_argument("--veo-poll-seconds", type=int, default=20, help="Polling interval for Veo operations")
+
+
+def _add_prompt_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--prompt", required=True, help="User prompt for the animation")
+    parser.add_argument("--negative-prompt", default=None, help="Optional negative prompt")
+    parser.add_argument("--input-image", default=None, help="Optional reference image path")
+    parser.add_argument("--prompt-rewrite", default="gemini", choices=["none", "rule", "gemini"], help="Prompt rewrite mode")
+    parser.add_argument("--gemini-model", default="gemini-3-flash-preview", help="Gemini model for prompt rewriting")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="medical_diffusion")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
+    # ---- run (existing) ----
     run_p = sub.add_parser("run", help="Generate + validate with agent loop")
     run_p.add_argument("--prompt", required=True, help="User prompt for the animation")
     run_p.add_argument("--out", default="runs/output.mp4", help="Output video path")
@@ -48,10 +77,44 @@ def main(argv: Optional[list[str]] = None) -> int:
     run_p.add_argument("--width", type=int, default=None)
     run_p.add_argument("--height", type=int, default=None)
 
+    # ---- extend-loop (new) ----
+    ext_p = sub.add_parser(
+        "extend-loop",
+        help="Iteratively extend a video with human validation at each step",
+    )
+    _add_prompt_args(ext_p)
+    _add_veo_args(ext_p, extension=True)
+    ext_p.add_argument("--out", default="runs/extend_output.mp4", help="Output video path")
+    ext_p.add_argument("--target-duration", type=float, default=60.0, help="Target total duration in seconds")
+    ext_p.add_argument("--max-extensions", type=int, default=20, help="Max number of Veo extensions (each ~7s)")
+    ext_p.add_argument("--fps", type=int, default=8, help="FPS for frame extraction / validation")
+    ext_p.add_argument("--biomedclip-target", default=None, help="BiomedCLIP target label (inferred from prompt if omitted)")
+    ext_p.add_argument("--biomedclip-labels", default=None, help="Comma-separated labels or path to label file")
+    ext_p.add_argument("--biomedclip-frames", type=int, default=12, help="Frames to sample per segment for BiomedCLIP")
+
+    # ---- oneshot (new) ----
+    one_p = sub.add_parser(
+        "oneshot",
+        help="Auto-extend to target duration without human gates (comparison baseline)",
+    )
+    _add_prompt_args(one_p)
+    _add_veo_args(one_p, extension=True)
+    one_p.add_argument("--out", default="runs/oneshot_output.mp4", help="Output video path")
+    one_p.add_argument("--target-duration", type=float, default=60.0, help="Target total duration in seconds")
+    one_p.add_argument("--max-extensions", type=int, default=20, help="Max number of Veo extensions (each ~7s)")
+    one_p.add_argument("--fps", type=int, default=8, help="FPS for frame extraction / validation")
+    one_p.add_argument("--biomedclip-target", default=None, help="BiomedCLIP target label (inferred from prompt if omitted)")
+    one_p.add_argument("--biomedclip-labels", default=None, help="Comma-separated labels or path to label file")
+    one_p.add_argument("--biomedclip-frames", type=int, default=12, help="Frames to sample per segment for BiomedCLIP")
+
     args = parser.parse_args(argv)
 
     if args.cmd == "run":
         return _run(args)
+    if args.cmd == "extend-loop":
+        return _extend_loop(args)
+    if args.cmd == "oneshot":
+        return _oneshot(args)
 
     parser.error(f"Unknown command: {args.cmd}")
     return 2
@@ -85,6 +148,7 @@ def _run(args: argparse.Namespace) -> int:
         spec = replace(spec, metadata=metadata)
 
     prompt_adjuster = None
+    original_prompt = spec.prompt
     if args.prompt_rewrite == "none":
         pass
     elif args.prompt_rewrite == "rule":
@@ -94,6 +158,12 @@ def _run(args: argparse.Namespace) -> int:
         prompt_adjuster = GeminiPromptAdjuster(model=args.gemini_model)
     else:
         raise ValueError(f"Unsupported --prompt-rewrite: {args.prompt_rewrite}")
+
+    if spec.prompt != original_prompt:
+        print(f"\n  Rewritten prompt ({args.prompt_rewrite}):\n  {spec.prompt}")
+        if spec.negative_prompt:
+            print(f"  Negative prompt: {spec.negative_prompt}")
+        print()
 
     from .generation.veo_genai import VeoGenaiBackend
 
@@ -169,3 +239,138 @@ def _normalize_out_path(raw: str, *, no_video: bool) -> Path:
         raise ValueError("`--out` must include a filename + extension (e.g. runs/demo.mp4) or end with `/` for a directory")
 
     return out_path
+
+
+# ---------------------------------------------------------------------------
+# Shared builder for extension pipeline validators
+# ---------------------------------------------------------------------------
+
+def _build_extension_validators(args: argparse.Namespace) -> list:
+    """Build the full validator list used by extend-loop and oneshot."""
+    validators: list = [FrameSanityMedicalValidator()]
+
+    biomedclip_kwargs: dict = {}
+    if args.biomedclip_target:
+        biomedclip_kwargs["target_label"] = args.biomedclip_target
+    if args.biomedclip_labels:
+        biomedclip_kwargs["labels"] = _parse_label_list(args.biomedclip_labels)
+    if args.biomedclip_frames:
+        biomedclip_kwargs["n_frames"] = args.biomedclip_frames
+    validators.append(BiomedCLIPMedicalValidator(**biomedclip_kwargs))
+
+    validators.append(RedDotGravityValidator())
+    validators.append(PyBulletPhysicsValidator())
+    return validators
+
+
+def _build_spec_for_extension(args: argparse.Namespace) -> "AnimationSpec":
+    """Parse prompt and apply rewriting for extend-loop / oneshot."""
+    from .types import AnimationSpec
+
+    processor = PromptProcessor()
+    spec = processor.parse(args.prompt)
+    if args.fps is not None:
+        spec = replace(spec, fps=args.fps)
+    if args.negative_prompt is not None:
+        spec = replace(spec, negative_prompt=args.negative_prompt)
+    if args.input_image:
+        spec = replace(spec, input_image_path=Path(args.input_image))
+
+    original_prompt = spec.prompt
+    if args.prompt_rewrite == "rule":
+        spec = processor.rewrite_for_veo(spec)
+    elif args.prompt_rewrite == "gemini":
+        spec = processor.rewrite_for_veo_gemini(spec, model=args.gemini_model)
+
+    if spec.prompt != original_prompt:
+        print(f"\n  Rewritten prompt ({args.prompt_rewrite}):\n  {spec.prompt}")
+        if spec.negative_prompt:
+            print(f"  Negative prompt: {spec.negative_prompt}")
+        print()
+
+    return spec
+
+
+# ---------------------------------------------------------------------------
+# extend-loop command
+# ---------------------------------------------------------------------------
+
+def _extend_loop(args: argparse.Namespace) -> int:
+    from .generation.veo_genai import VeoGenaiBackend
+    from .pipeline import ExtensionPipelineConfig, InteractiveExtensionPipeline
+
+    spec = _build_spec_for_extension(args)
+
+    backend = VeoGenaiBackend(
+        model=args.veo_model,
+        aspect_ratio=args.veo_aspect_ratio,
+        resolution=args.veo_resolution,
+        poll_seconds=args.veo_poll_seconds,
+    )
+    validators = _build_extension_validators(args)
+    config = ExtensionPipelineConfig(
+        target_duration_s=args.target_duration,
+        max_extensions=args.max_extensions,
+        fps=args.fps,
+        gemini_model=args.gemini_model,
+    )
+
+    pipeline = InteractiveExtensionPipeline(
+        backend=backend,
+        validators=validators,
+        config=config,
+        initial_spec=spec,
+    )
+
+    try:
+        report = pipeline.run()
+    except SystemExit:
+        return 0
+
+    out_path = _normalize_out_path(args.out, no_video=False)
+    if report.final_path and report.final_path.exists():
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(report.final_path, out_path)
+        print(f"\nWrote: {out_path}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# oneshot command
+# ---------------------------------------------------------------------------
+
+def _oneshot(args: argparse.Namespace) -> int:
+    from .generation.veo_genai import VeoGenaiBackend
+    from .pipeline import ExtensionPipelineConfig, OneshotPipeline
+
+    spec = _build_spec_for_extension(args)
+
+    backend = VeoGenaiBackend(
+        model=args.veo_model,
+        aspect_ratio=args.veo_aspect_ratio,
+        resolution=args.veo_resolution,
+        poll_seconds=args.veo_poll_seconds,
+    )
+    validators = _build_extension_validators(args)
+    config = ExtensionPipelineConfig(
+        target_duration_s=args.target_duration,
+        max_extensions=args.max_extensions,
+        fps=args.fps,
+        gemini_model=args.gemini_model,
+    )
+
+    pipeline = OneshotPipeline(
+        backend=backend,
+        validators=validators,
+        config=config,
+        initial_spec=spec,
+    )
+
+    report = pipeline.run()
+
+    out_path = _normalize_out_path(args.out, no_video=False)
+    if report.final_path and report.final_path.exists():
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(report.final_path, out_path)
+        print(f"\nWrote: {out_path}")
+    return 0

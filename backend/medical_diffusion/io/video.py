@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 
 class VideoEncodeError(RuntimeError):
@@ -120,6 +121,63 @@ def mux_audio_ffmpeg(
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise VideoEncodeError(proc.stderr.strip() or f"ffmpeg mux failed with exit code {proc.returncode}")
+
+
+def concatenate_videos_ffmpeg(
+    *,
+    video_paths: List[Path],
+    output_path: Path,
+) -> Path:
+    """Concatenate multiple MP4 files using the ffmpeg concat demuxer."""
+    if not video_paths:
+        raise VideoEncodeError("No video paths provided for concatenation")
+    if len(video_paths) == 1:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(video_paths[0], output_path)
+        return output_path
+
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise VideoEncodeError("ffmpeg not found on PATH (required to concatenate videos)")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".txt", delete=False, prefix="concat_"
+    ) as f:
+        for vp in video_paths:
+            f.write(f"file '{vp.resolve()}'\n")
+        concat_list = Path(f.name)
+
+    try:
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_list),
+            "-c",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise VideoEncodeError(
+                proc.stderr.strip()
+                or f"ffmpeg concat failed with exit code {proc.returncode}"
+            )
+    finally:
+        concat_list.unlink(missing_ok=True)
+
+    return output_path
 
 
 def extract_frames_ffmpeg(

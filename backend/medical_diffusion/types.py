@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 
 @dataclass(frozen=True)
@@ -67,3 +67,27 @@ class AgentResult:
     accepted: bool
     final: AgentRound
     history: List[AgentRound]
+
+
+# ---------------------------------------------------------------------------
+# Extension pipeline types
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SegmentResult:
+    segment_index: int
+    video_path: Path
+    duration_s: float
+    prompt: str
+    validation_scores: Dict[str, ValidationScore] = field(default_factory=dict)
+    accepted: bool = True
+
+
+@dataclass(frozen=True)
+class PipelineReport:
+    segments: List[SegmentResult]
+    mode: Literal["interactive", "oneshot"]
+    total_duration: float
+    final_path: Optional[Path] = None
+    aggregate_scores: Dict[str, float] = field(default_factory=dict)

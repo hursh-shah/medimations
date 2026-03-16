@@ -18,10 +18,17 @@ class GeminiConfig:
     max_output_tokens: int = 1024
 
 
+def _mask_api_key(key: str) -> str:
+    if len(key) <= 12:
+        return "***"
+    return f"{key[:8]}...{key[-4:]}"
+
+
 def load_gemini_config(*, model: str = "gemini-3-flash-preview") -> GeminiConfig:
     api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
     if not api_key:
         raise GeminiError("GOOGLE_API_KEY is not set (required for Gemini prompt rewriting)")
+    print(f"GOOGLE_API_KEY (Gemini): {_mask_api_key(api_key)}", flush=True)
     return GeminiConfig(api_key=api_key, model=model)
 
 

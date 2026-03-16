@@ -81,6 +81,8 @@ class VeoGenaiBackend:
         api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
         if not api_key:
             raise RuntimeError("GOOGLE_API_KEY is not set (required for --backend veo)")
+        _mask = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
+        print(f"GOOGLE_API_KEY (Veo): {_mask}", flush=True)
         client = genai.Client(api_key=api_key)
 
         image = None
@@ -119,8 +121,9 @@ class VeoGenaiBackend:
             raise RuntimeError("Veo returned no videos")
 
         generated_video = operation.response.generated_videos[0]
-        client.files.download(file=generated_video.video)
-        generated_video.video.save(str(video_path))
+        veo_video_ref = generated_video.video
+        client.files.download(file=veo_video_ref)
+        veo_video_ref.save(str(video_path))
 
         try:
             extract_frames_ffmpeg(
@@ -146,33 +149,39 @@ class VeoGenaiBackend:
                 "video_path": str(video_path),
                 "model": self.model,
                 "input_image_path": str(spec.input_image_path) if spec.input_image_path is not None else None,
+                "veo_video_ref": veo_video_ref,
             },
         )
 
     def extend_video(
         self,
         *,
-        source_video_path: Path,
+        source_video: Any,
         prompt: str,
         negative_prompt: Optional[str] = None,
         output_dir: Path,
         fps: int = 8,
     ) -> ExtendVideoResult:
         """
-        Extend an existing video using Veo's video-to-video continuation.
-        
-        This uses the source video as a reference and generates a continuation
-        based on the provided prompt.
-        
+        Extend an existing video using Veo 3.1's video extension API.
+
+        The Veo extension API requires a Video object returned by a previous
+        generation (``operation.response.generated_videos[0].video``).  Raw
+        bytes / local files are **not** accepted.  The returned video is the
+        full combined result (original + extension).
+
         Args:
-            source_video_path: Path to the source video file to extend
-            prompt: The prompt describing what should happen in the continuation
-            negative_prompt: Optional negative prompt for things to avoid
-            output_dir: Directory to save the extended video and frames
-            fps: Frames per second for frame extraction
-            
+            source_video: The API Video object from a prior generate / extend call
+                          (stored in metadata["veo_video_ref"]).
+            prompt: Continuation prompt.
+            negative_prompt: Optional negative prompt.
+            output_dir: Directory to save the extended video and frames.
+            fps: Frames per second for frame extraction.
+
         Returns:
-            ExtendVideoResult with paths to the extended video and frames
+            ExtendVideoResult whose ``video_path`` is the **full** combined
+            video and whose metadata contains ``veo_video_ref`` for the next
+            extension.
         """
         ensure_empty_dir(output_dir)
         frames_dir = output_dir / "frames"
@@ -191,34 +200,27 @@ class VeoGenaiBackend:
         api_key = os.environ.get("GOOGLE_API_KEY", "").strip()
         if not api_key:
             raise RuntimeError("GOOGLE_API_KEY is not set (required for video extension)")
-        
+
         client = genai.Client(api_key=api_key)
 
-        # Validate source video exists
-        source_video_path = Path(source_video_path)
-        if not source_video_path.exists():
-            raise RuntimeError(f"Source video not found: {source_video_path}")
+        if source_video is None:
+            raise RuntimeError(
+                "source_video must be a Video object from a previous Veo generation "
+                "(stored in metadata['veo_video_ref']). Raw file paths are not supported "
+                "by the Veo extension API."
+            )
 
-        # Read video bytes and create Video object
-        video_bytes = source_video_path.read_bytes()
-        video = types.Video(
-            video_bytes=video_bytes,
-            mime_type="video/mp4",
-        )
-
-        # Generate extended video using source video as reference
         operation = client.models.generate_videos(
             model=self.model,
             prompt=prompt,
-            video=video,
+            video=source_video,
             config=types.GenerateVideosConfig(
                 negative_prompt=negative_prompt or None,
-                aspect_ratio=self.aspect_ratio,
-                resolution=self.resolution,
+                number_of_videos=1,
+                resolution="720p",
             ),
         )
 
-        # Poll until done
         while not operation.done:
             time.sleep(max(1, int(self.poll_seconds)))
             operation = client.operations.get(operation)
@@ -226,12 +228,11 @@ class VeoGenaiBackend:
         if not getattr(operation, "response", None) or not getattr(operation.response, "generated_videos", None):
             raise RuntimeError("Veo returned no videos for extension")
 
-        # Download and save the extended video
         generated_video = operation.response.generated_videos[0]
-        client.files.download(file=generated_video.video)
-        generated_video.video.save(str(extended_video_path))
+        veo_video_ref = generated_video.video
+        client.files.download(file=veo_video_ref)
+        veo_video_ref.save(str(extended_video_path))
 
-        # Extract frames from the extended video
         try:
             extract_frames_ffmpeg(
                 video_path=extended_video_path,
@@ -251,13 +252,13 @@ class VeoGenaiBackend:
             video_path=extended_video_path,
             frames=frames,
             frames_dir=frames_dir,
-            source_video_path=source_video_path,
+            source_video_path=extended_video_path,
             prompt=prompt,
             model=self.model,
             metadata={
-                "source_video_path": str(source_video_path),
                 "extended_video_path": str(extended_video_path),
                 "negative_prompt": negative_prompt,
+                "veo_video_ref": veo_video_ref,
             },
         )
 

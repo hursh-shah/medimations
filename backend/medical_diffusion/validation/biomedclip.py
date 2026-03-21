@@ -108,16 +108,7 @@ class BiomedCLIPMedicalValidator:
         if not generation.frames:
             return ValidationScore(name=self.name, score=0.0, feedback="No frames produced")
 
-        try:
-            self._ensure_loaded()
-        except Exception as e:
-            return ValidationScore(
-                name=self.name,
-                score=1.0,
-                skipped=True,
-                feedback=str(e),
-                details={"skipped_reason": "biomedclip_unavailable"},
-            )
+        self._ensure_loaded()
 
         labels = list(self._labels)
         metadata_target = None

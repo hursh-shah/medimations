@@ -28,7 +28,7 @@ from .prompt_processor import PromptProcessor
 from .types import AgentResult, AnimationSpec, GenerationResult, ValidationScore
 from .validation.biomedclip import BiomedCLIPMedicalValidator
 from .validation.medical import FrameSanityMedicalValidator
-from .validation.physics import PyBulletPhysicsValidator, RedDotGravityValidator
+from .validation.physics import PyBulletPhysicsValidator
 
 
 RUNS_DIR = Path(os.environ.get("MEDICAL_DIFFUSION_RUNS_DIR", "runs"))
@@ -942,7 +942,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
 
         medical_validators = [FrameSanityMedicalValidator()]
 
-        physics_validators = [RedDotGravityValidator(), PyBulletPhysicsValidator()]
+        physics_validators = [PyBulletPhysicsValidator()]
 
         prompt_adjuster = GeminiPromptAdjuster(model=req.gemini_model) if req.prompt_rewrite == "gemini" else None
         agent = ValidatorAgent(

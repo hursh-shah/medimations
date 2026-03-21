@@ -102,14 +102,44 @@ class VeoGenaiBackend:
                     mime_type = "image/webp"
                 image = types.Image(image_bytes=image_path.read_bytes(), mime_type=mime_type)
 
+        reference_images = None
+        if spec.reference_image_paths:
+            reference_images = []
+            for ref_path in spec.reference_image_paths:
+                ref_path = Path(ref_path)
+                if not ref_path.exists():
+                    raise RuntimeError(f"Reference image not found: {ref_path}")
+                if hasattr(types.Image, "from_file"):
+                    ref_img = types.Image.from_file(location=str(ref_path))
+                else:
+                    mime = "image/png"
+                    ref_ext = ref_path.suffix.lower().lstrip(".")
+                    if ref_ext in {"jpg", "jpeg"}:
+                        mime = "image/jpeg"
+                    elif ref_ext == "webp":
+                        mime = "image/webp"
+                    ref_img = types.Image(image_bytes=ref_path.read_bytes(), mime_type=mime)
+                reference_images.append(
+                    types.VideoGenerationReferenceImage(
+                        image=ref_img,
+                        reference_type="ASSET",
+                    )
+                )
+
+        # Veo does not support negative_prompt when reference images are used
+        neg_prompt = None if reference_images else (spec.negative_prompt or None)
+        if reference_images and spec.negative_prompt:
+            print("  Note: negative prompt is ignored when using reference images (Veo API limitation)")
+
         operation = client.models.generate_videos(
             model=self.model,
             prompt=spec.prompt,
             image=image,
             config=types.GenerateVideosConfig(
-                negative_prompt=spec.negative_prompt or None,
+                negative_prompt=neg_prompt,
                 aspect_ratio=self.aspect_ratio,
                 resolution=self.resolution,
+                reference_images=reference_images,
             ),
         )
 
@@ -118,7 +148,15 @@ class VeoGenaiBackend:
             operation = client.operations.get(operation)
 
         if not getattr(operation, "response", None) or not getattr(operation.response, "generated_videos", None):
-            raise RuntimeError("Veo returned no videos")
+            # Surface as much diagnostic info as we can
+            diag_parts = ["Veo returned no videos."]
+            if hasattr(operation, "error") and operation.error:
+                diag_parts.append(f"Error: {operation.error}")
+            if hasattr(operation, "metadata") and operation.metadata:
+                diag_parts.append(f"Metadata: {operation.metadata}")
+            if hasattr(operation, "response") and operation.response:
+                diag_parts.append(f"Response: {operation.response}")
+            raise RuntimeError(" | ".join(diag_parts))
 
         generated_video = operation.response.generated_videos[0]
         veo_video_ref = generated_video.video
@@ -226,7 +264,14 @@ class VeoGenaiBackend:
             operation = client.operations.get(operation)
 
         if not getattr(operation, "response", None) or not getattr(operation.response, "generated_videos", None):
-            raise RuntimeError("Veo returned no videos for extension")
+            diag_parts = ["Veo returned no videos for extension."]
+            if hasattr(operation, "error") and operation.error:
+                diag_parts.append(f"Error: {operation.error}")
+            if hasattr(operation, "metadata") and operation.metadata:
+                diag_parts.append(f"Metadata: {operation.metadata}")
+            if hasattr(operation, "response") and operation.response:
+                diag_parts.append(f"Response: {operation.response}")
+            raise RuntimeError(" | ".join(diag_parts))
 
         generated_video = operation.response.generated_videos[0]
         veo_video_ref = generated_video.video
@@ -372,7 +417,14 @@ class VeoGenaiBackend:
             operation = client.operations.get(operation)
 
         if not getattr(operation, "response", None) or not getattr(operation.response, "generated_videos", None):
-            raise RuntimeError(f"Veo returned no videos for {mode.value} edit")
+            diag_parts = [f"Veo returned no videos for {mode.value} edit."]
+            if hasattr(operation, "error") and operation.error:
+                diag_parts.append(f"Error: {operation.error}")
+            if hasattr(operation, "metadata") and operation.metadata:
+                diag_parts.append(f"Metadata: {operation.metadata}")
+            if hasattr(operation, "response") and operation.response:
+                diag_parts.append(f"Response: {operation.response}")
+            raise RuntimeError(" | ".join(diag_parts))
 
         # Download and save the edited video
         generated_video = operation.response.generated_videos[0]

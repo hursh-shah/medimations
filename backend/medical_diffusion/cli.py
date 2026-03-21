@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import argparse
 import shutil
+import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from .agent import AgentConfig, ValidatorAgent
 from .agent import GeminiPromptAdjuster
@@ -13,7 +14,7 @@ from .io.video import VideoEncodeError
 from .prompt_processor import PromptProcessor
 from .validation.biomedclip import BiomedCLIPMedicalValidator
 from .validation.medical import FrameSanityMedicalValidator
-from .validation.physics import PyBulletPhysicsValidator, RedDotGravityValidator
+from .validation.physics import PyBulletPhysicsValidator
 
 
 # ---------------------------------------------------------------------------
@@ -35,8 +36,39 @@ def _add_prompt_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--prompt", required=True, help="User prompt for the animation")
     parser.add_argument("--negative-prompt", default=None, help="Optional negative prompt")
     parser.add_argument("--input-image", default=None, help="Optional reference image path")
+    parser.add_argument("--reference-dir", default=None, help="Directory of reference images (up to 3 PNG/JPG/WebP) for subject-consistent generation")
     parser.add_argument("--prompt-rewrite", default="gemini", choices=["none", "rule", "gemini"], help="Prompt rewrite mode")
     parser.add_argument("--gemini-model", default="gemini-3-flash-preview", help="Gemini model for prompt rewriting")
+
+
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _resolve_reference_images(raw_dir: Optional[str]) -> Optional[List[Path]]:
+    """Load and validate reference images from a directory path.
+
+    Returns None if raw_dir is None, or a list of 1-3 image Paths.
+    Prints errors/warnings to stderr and raises SystemExit on fatal issues.
+    """
+    if raw_dir is None:
+        return None
+    ref_dir = Path(raw_dir)
+    if not ref_dir.is_dir():
+        print(f"Error: --reference-dir '{ref_dir}' is not a directory", file=sys.stderr)
+        raise SystemExit(1)
+    ref_images = sorted(
+        p for p in ref_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in _IMAGE_EXTENSIONS
+    )
+    if not ref_images:
+        print(f"Error: no images (PNG/JPG/WebP) found in --reference-dir '{ref_dir}'", file=sys.stderr)
+        raise SystemExit(1)
+    if len(ref_images) > 3:
+        print(f"  Warning: Veo supports max 3 reference images, using first 3 of {len(ref_images)}", file=sys.stderr)
+        ref_images = ref_images[:3]
+    names = ", ".join(p.name for p in ref_images)
+    print(f"  Reference images ({len(ref_images)}): {names}")
+    return ref_images
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +86,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     run_p.add_argument("--no-video", action="store_true", help="Skip ffmpeg encode; leave frames on disk")
     run_p.add_argument("--negative-prompt", default=None, help="Optional negative prompt (backends that support it)")
     run_p.add_argument("--input-image", default=None, help="Optional reference image path for image+text → video")
+    run_p.add_argument("--reference-dir", default=None, help="Directory of reference images (up to 3 PNG/JPG/WebP) for subject-consistent generation")
     run_p.add_argument("--veo-model", default="veo-3.1-generate-preview", help="Veo model id")
     run_p.add_argument("--veo-aspect-ratio", default="9:16", help="Veo aspect ratio, e.g. 9:16")
     run_p.add_argument("--veo-resolution", default="720p", help="Veo resolution, e.g. 720p")
@@ -136,6 +169,9 @@ def _run(args: argparse.Namespace) -> int:
         spec = replace(spec, negative_prompt=args.negative_prompt)
     if args.input_image:
         spec = replace(spec, input_image_path=Path(args.input_image))
+    ref_images = _resolve_reference_images(args.reference_dir)
+    if ref_images:
+        spec = replace(spec, reference_image_paths=ref_images)
 
     metadata = dict(spec.metadata or {})
     if args.fps is not None:
@@ -178,7 +214,7 @@ def _run(args: argparse.Namespace) -> int:
     if args.biomedclip or args.biomedclip_target or args.biomedclip_labels:
         print("Warning: BiomedCLIP validation is no longer run on video frames (use /api/images/generate instead).")
 
-    physics_validators = [RedDotGravityValidator(), PyBulletPhysicsValidator()]
+    physics_validators = [PyBulletPhysicsValidator()]
 
     agent = ValidatorAgent(
         generator=backend,
@@ -258,7 +294,6 @@ def _build_extension_validators(args: argparse.Namespace) -> list:
         biomedclip_kwargs["n_frames"] = args.biomedclip_frames
     validators.append(BiomedCLIPMedicalValidator(**biomedclip_kwargs))
 
-    validators.append(RedDotGravityValidator())
     validators.append(PyBulletPhysicsValidator())
     return validators
 
@@ -275,6 +310,9 @@ def _build_spec_for_extension(args: argparse.Namespace) -> "AnimationSpec":
         spec = replace(spec, negative_prompt=args.negative_prompt)
     if args.input_image:
         spec = replace(spec, input_image_path=Path(args.input_image))
+    ref_images = _resolve_reference_images(args.reference_dir)
+    if ref_images:
+        spec = replace(spec, reference_image_paths=ref_images)
 
     original_prompt = spec.prompt
     if args.prompt_rewrite == "rule":

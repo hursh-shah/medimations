@@ -15,6 +15,7 @@ class AnimationSpec:
     input_image_path: Optional[Path] = None
     seed: Optional[int] = None
     negative_prompt: Optional[str] = None
+    reference_image_paths: Optional[List[Path]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     @property

@@ -13,7 +13,7 @@ from .io.export import export_final_video
 from .io.video import VideoEncodeError
 from .prompt_processor import PromptProcessor
 from .validation.biomedclip import BiomedCLIPMedicalValidator
-from .validation.medical import FrameSanityMedicalValidator
+from .validation.medical import FrameSanityCinematicValidator
 from .validation.physics import PyBulletPhysicsValidator
 
 
@@ -210,7 +210,7 @@ def _run(args: argparse.Namespace) -> int:
         poll_seconds=args.veo_poll_seconds,
     )
 
-    medical_validators = [FrameSanityMedicalValidator()]
+    medical_validators = [FrameSanityCinematicValidator()]
     if args.biomedclip or args.biomedclip_target or args.biomedclip_labels:
         print("Warning: BiomedCLIP validation is no longer run on video frames (use /api/images/generate instead).")
 
@@ -283,7 +283,7 @@ def _normalize_out_path(raw: str, *, no_video: bool) -> Path:
 
 def _build_extension_validators(args: argparse.Namespace) -> list:
     """Build the full validator list used by extend-loop and oneshot."""
-    validators: list = [FrameSanityMedicalValidator()]
+    validators: list = [FrameSanityCinematicValidator()]
 
     biomedclip_kwargs: dict = {}
     if args.biomedclip_target:

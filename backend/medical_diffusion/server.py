@@ -27,7 +27,7 @@ from .postprocess.twelvelabs import TwelveLabsConfig, generate_captions_with_twe
 from .prompt_processor import PromptProcessor
 from .types import AgentResult, AnimationSpec, GenerationResult, ValidationScore
 from .validation.biomedclip import BiomedCLIPMedicalValidator
-from .validation.medical import FrameSanityMedicalValidator
+from .validation.medical import FrameSanityCinematicValidator
 from .validation.physics import PyBulletPhysicsValidator
 
 
@@ -940,7 +940,7 @@ def _run_job(job_id: str, req: GenerateRequest) -> None:
 
         backend = _make_backend(req)
 
-        medical_validators = [FrameSanityMedicalValidator()]
+        medical_validators = [FrameSanityCinematicValidator()]
 
         physics_validators = [PyBulletPhysicsValidator()]
 

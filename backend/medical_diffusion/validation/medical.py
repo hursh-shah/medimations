@@ -6,16 +6,15 @@ from ..io.ppm import mean_rgb, read_ppm
 from ..types import GenerationResult, ValidationScore
 
 
-class FrameSanityMedicalValidator:
+class FrameSanityCinematicValidator:
     """
-    Not "medical correctness" — just basic sanity checks.
+    Basic cinematic sanity checks (flicker detection).
 
-    Replace/extend with:
-    - CLIP/OpenCLIP embeddings vs a labeled reference library
-    - a VLM/LLM judge with structured rubric (anatomy, flow direction, etc.)
+    This is NOT grounded in medical knowledge — it only measures
+    frame-to-frame brightness stability as a proxy for temporal coherence.
     """
 
-    name = "medical_sanity"
+    name = "cinematic_sanity"
 
     def score(self, generation: GenerationResult) -> ValidationScore:
         if not generation.frames:
